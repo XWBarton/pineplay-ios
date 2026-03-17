@@ -1,9 +1,5 @@
 # PinePlay — iOS Client for Pinepods
 
-If you find this useful, please consider supporting the maintenance :)
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/xbarton)
-
 | Library | Player | Feed |
 |---|---|---|
 | ![Library](screenshots/IMG_1261.PNG) | ![Player](screenshots/IMG_1262.PNG) | ![Feed](screenshots/IMG_1263.PNG) |
@@ -60,3 +56,9 @@ Communicates with the standard Pinepods REST API using an `Api-Key` header for a
 ## License
 
 MIT
+
+---
+
+If you find this useful, please consider supporting the maintenance :)
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/xbarton)
