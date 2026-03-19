@@ -12,7 +12,6 @@ An unofficial native iOS app for [Pinepods](https://github.com/madeofpendletonwo
 - **Feed** — Latest episodes across all your podcasts. Pull to refresh, swipe right to download, left to mark played.
 - **Continue Listening** — Horizontal card strip showing in-progress episodes with a progress bar. Tap to resume instantly.
 - **Full-screen Player** — Artwork, scrub bar, skip back 15s / forward 30s, playback speed control, sleep timer.
-- **Mini Player** — Persistent bar above the tab bar. Quick play/pause and +30s skip without leaving your current view.
 - **Lock Screen & Control Centre** — Full Now Playing card with artwork, scrubbing, and skip controls via MPRemoteCommandCenter.
 - **AirPods & Bluetooth** — Previous/next track gestures mapped to skip back/forward.
 - **Per-show Accent Colours** — Auto-samples the dominant colour from artwork, or pick your own with the built-in colour picker (including an eyedropper to sample any pixel from the artwork).
