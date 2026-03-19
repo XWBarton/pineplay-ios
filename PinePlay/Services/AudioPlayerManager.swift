@@ -99,7 +99,9 @@ class AudioPlayerManager: ObservableObject {
 
         // Prefer the live local cache (updated every 15 s) over the server-fetched listenDuration,
         // which may be stale if the episode was recently played without a feed refresh.
+        // If the episode is marked completed, always start from the beginning.
         let resumeSeconds: Double = {
+            guard !episode.completed else { return 0 }
             if let local = localProgress[episode.id], local > 0 { return local }
             if let server = episode.listenDuration, server > 0 { return Double(server) }
             return 0
@@ -200,6 +202,7 @@ class AudioPlayerManager: ObservableObject {
                 guard let self, let ep = self.currentEpisode else { return }
                 self.isPlaying = false
                 self.currentTime = 0
+                self.localProgress.removeValue(forKey: ep.id)
                 self.onEpisodeCompleted?(ep)
                 self.playNextInQueue()
             }

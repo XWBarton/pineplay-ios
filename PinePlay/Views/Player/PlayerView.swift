@@ -66,18 +66,10 @@ struct PlayerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { showQueue = true } label: {
-                    Image(systemName: player.queue.isEmpty ? "list.bullet" : "list.bullet.indent")
-                        .overlay(alignment: .topTrailing) {
-                            if !player.queue.isEmpty {
-                                Text("\(player.queue.count)")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(3)
-                                    .background(player.artworkAccent, in: Circle())
-                                    .offset(x: 8, y: -8)
-                            }
-                        }
+                if !player.queue.isEmpty {
+                    Button { showQueue = true } label: {
+                        Image(systemName: "list.bullet")
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {

@@ -12,6 +12,8 @@ struct PodcastDetailView: View {
     @State private var errorMessage: String?
     @State private var filter: EpisodeFilter = .all
     @State private var sortOrder: SortOrder = .newestFirst
+    @State private var showShuffleQueueSheet = false
+    @State private var shuffleQueueCount: Double = 5
 
     enum EpisodeFilter: String, CaseIterable {
         case all = "All"
@@ -123,16 +125,79 @@ struct PodcastDetailView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    shuffleEpisodes()
-                } label: {
-                    Image(systemName: "shuffle")
-                }
-                .disabled(filteredEpisodes.isEmpty)
+                Image(systemName: "shuffle")
+                    .foregroundStyle(filteredEpisodes.isEmpty ? Color.secondary : Color.accentColor)
+                    .onTapGesture {
+                        guard !filteredEpisodes.isEmpty else { return }
+                        shuffleEpisodes()
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        guard !filteredEpisodes.isEmpty else { return }
+                        showShuffleQueueSheet = true
+                    }
             }
         }
         .refreshable { await loadEpisodes() }
         .task { await loadEpisodes() }
+        .sheet(isPresented: $showShuffleQueueSheet) {
+            shuffleQueueSheet
+        }
+    }
+
+    @ViewBuilder
+    private var shuffleQueueSheet: some View {
+        NavigationStack {
+            let maxCount = min(filteredEpisodes.count, 50)
+            let count = Int(shuffleQueueCount)
+            Form {
+                Section {
+                    VStack(spacing: 16) {
+                        Image(systemName: "shuffle")
+                            .font(.largeTitle)
+                            .foregroundStyle(.tint)
+                        Text("Add \(count) shuffled episode\(count == 1 ? "" : "s") to queue")
+                            .font(.headline)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
+                }
+
+                Section {
+                    Slider(
+                        value: $shuffleQueueCount,
+                        in: 1...Double(maxCount),
+                        step: 1
+                    )
+                    Stepper(
+                        "\(count) episode\(count == 1 ? "" : "s")",
+                        value: $shuffleQueueCount,
+                        in: 1...Double(maxCount),
+                        step: 1
+                    )
+                } header: {
+                    Text("Number of episodes")
+                } footer: {
+                    Text("\(filteredEpisodes.count) episode\(filteredEpisodes.count == 1 ? "" : "s") available")
+                }
+            }
+            .navigationTitle("Shuffle to Queue")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        shuffleToQueue(count)
+                        showShuffleQueueSheet = false
+                    }
+                }
+            }
+            .onAppear {
+                let maxCount = min(filteredEpisodes.count, 50)
+                shuffleQueueCount = min(shuffleQueueCount, Double(maxCount))
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private func loadEpisodes() async {
@@ -164,6 +229,17 @@ struct PodcastDetailView: View {
     private func shuffleEpisodes() {
         guard let episode = filteredEpisodes.randomElement() else { return }
         playEpisode(episode)
+    }
+
+    private func shuffleToQueue(_ count: Int) {
+        let wasIdle = player.currentEpisode == nil && player.queue.isEmpty
+        let shuffled = filteredEpisodes.shuffled().prefix(count)
+        for episode in shuffled {
+            player.addToQueue(episode)
+        }
+        if wasIdle {
+            player.playNextInQueue()
+        }
     }
 
     private func toggleCompleted(_ episode: EpisodeItem) {
