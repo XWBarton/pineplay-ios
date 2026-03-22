@@ -22,7 +22,6 @@
 		A8AB88F72F6016FB00802E40 /* EpisodeRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88E82F6016FB00802E40 /* EpisodeRowView.swift */; };
 		A8AB88F82F6016FB00802E40 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88D32F6016FB00802E40 /* ContentView.swift */; };
 		A8AB88F92F6016FB00802E40 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88DE2F6016FB00802E40 /* SettingsView.swift */; };
-		A8AB88FA2F6016FB00802E40 /* MiniPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88E52F6016FB00802E40 /* MiniPlayerView.swift */; };
 		A8AB8901301000000000AA01 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A8AB8900301000000000AA01 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -40,7 +39,6 @@
 		A8AB88E22F6016FB00802E40 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		A8AB88E32F6016FB00802E40 /* PodcastDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastDetailView.swift; sourceTree = "<group>"; };
 		A8AB88FE2F6016FB00802E41 /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadsView.swift; sourceTree = "<group>"; };
-		A8AB88E52F6016FB00802E40 /* MiniPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerView.swift; sourceTree = "<group>"; };
 		A8AB88E62F6016FB00802E40 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		A8AB88E82F6016FB00802E40 /* EpisodeRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpisodeRowView.swift; sourceTree = "<group>"; };
 		A8AB88E92F6016FB00802E40 /* PodcastArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastArtworkView.swift; sourceTree = "<group>"; };
@@ -135,7 +133,6 @@
 		A8AB88E72F6016FB00802E40 /* Player */ = {
 			isa = PBXGroup;
 			children = (
-				A8AB88E52F6016FB00802E40 /* MiniPlayerView.swift */,
 				A8AB88E62F6016FB00802E40 /* PlayerView.swift */,
 			);
 			path = Player;
@@ -249,7 +246,6 @@
 				A8AB88F72F6016FB00802E40 /* EpisodeRowView.swift in Sources */,
 				A8AB88F82F6016FB00802E40 /* ContentView.swift in Sources */,
 				A8AB88F92F6016FB00802E40 /* SettingsView.swift in Sources */,
-				A8AB88FA2F6016FB00802E40 /* MiniPlayerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

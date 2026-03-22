@@ -130,7 +130,11 @@ struct HTMLInlineView: View {
 
     private func parseHTML(_ html: String) async -> AttributedString? {
         await Task.detached(priority: .utility) {
-            guard let data = html.data(using: .utf8),
+            let styled = """
+                <style>body { font-family: -apple-system; font-size: 12px; color: inherit; }</style>
+                \(html)
+                """
+            guard let data = styled.data(using: .utf8),
                   let ns = try? NSAttributedString(
                     data: data,
                     options: [.documentType: NSAttributedString.DocumentType.html,

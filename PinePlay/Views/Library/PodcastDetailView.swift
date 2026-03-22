@@ -14,6 +14,7 @@ struct PodcastDetailView: View {
     @State private var sortOrder: SortOrder = .newestFirst
     @State private var showShuffleQueueSheet = false
     @State private var shuffleQueueCount: Double = 5
+    @State private var selectedEpisode: EpisodeItem?
 
     enum EpisodeFilter: String, CaseIterable {
         case all = "All"
@@ -91,6 +92,7 @@ struct PodcastDetailView: View {
                         EpisodeRowView(
                             episode: episode,
                             showPodcastName: false,
+                            onTap: { selectedEpisode = episode },
                             onPlay: { playEpisode(episode) },
                             onDownload: { downloadEpisode(episode) },
                             onDelete: { deleteDownload(episode) },
@@ -141,6 +143,15 @@ struct PodcastDetailView: View {
         .task { await loadEpisodes() }
         .sheet(isPresented: $showShuffleQueueSheet) {
             shuffleQueueSheet
+        }
+        .sheet(item: $selectedEpisode) { ep in
+            EpisodeDetailSheet(
+                episode: ep,
+                onPlay: { playEpisode(ep) },
+                onDownload: { downloadEpisode(ep) },
+                onDelete: { deleteDownload(ep) },
+                onToggleCompleted: { toggleCompleted(ep) }
+            )
         }
     }
 

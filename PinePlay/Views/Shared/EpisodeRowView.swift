@@ -65,11 +65,136 @@ private struct _MarqueeWidthKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+// MARK: - Episode Detail Sheet
+
+struct EpisodeDetailSheet: View {
+    let episode: EpisodeItem
+    let onPlay: () -> Void
+    let onDownload: () -> Void
+    let onDelete: () -> Void
+    let onToggleCompleted: () -> Void
+
+    @EnvironmentObject var player: AudioPlayerManager
+    @EnvironmentObject var downloads: DownloadManager
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    PodcastArtworkView(url: episode.artwork, size: 160, cornerRadius: 16)
+                        .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
+
+                    VStack(spacing: 6) {
+                        Text(episode.title)
+                            .font(.title3.bold())
+                            .multilineTextAlignment(.center)
+                        Text(episode.podcastName)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Text(episode.pubDate.prefix(10))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(episode.formattedDuration)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if episode.completed {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    HStack(spacing: 32) {
+                        actionButton(
+                            icon: player.currentEpisode?.id == episode.id && player.isPlaying
+                                ? "pause.circle.fill" : "play.circle.fill",
+                            label: "Play"
+                        ) {
+                            onPlay()
+                            dismiss()
+                        }
+                        actionButton(
+                            icon: "text.line.first.and.arrowtriangle.forward",
+                            label: "Play Next"
+                        ) {
+                            player.playEpisodeNext(episode)
+                            dismiss()
+                        }
+                        actionButton(icon: "text.badge.plus", label: "Queue") {
+                            player.addToQueue(episode)
+                            dismiss()
+                        }
+                        if downloads.locallyDownloaded.contains(episode.id) {
+                            actionButton(icon: "arrow.down.circle.fill", label: "Downloaded", tint: .accentColor) {
+                                onDelete()
+                            }
+                        } else {
+                            actionButton(icon: "arrow.down.circle", label: "Download") {
+                                onDownload()
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    Button {
+                        onToggleCompleted()
+                        dismiss()
+                    } label: {
+                        Label(
+                            episode.completed ? "Mark as Unplayed" : "Mark as Played",
+                            systemImage: episode.completed ? "circle" : "checkmark.circle"
+                        )
+                        .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+
+                    if !episode.description.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Episode Notes")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            EpisodeNotesView(text: episode.description)
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical, 24)
+            }
+            .navigationTitle("Episode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(icon: String, label: String, tint: Color = .primary, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 32))
+                Text(label)
+                    .font(.caption)
+            }
+            .foregroundStyle(tint)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Episode Row
 
 struct EpisodeRowView: View {
     let episode: EpisodeItem
     var showPodcastName: Bool = true
+    var onTap: (() -> Void)? = nil
     let onPlay: () -> Void
     let onDownload: () -> Void
     let onDelete: () -> Void
@@ -130,15 +255,17 @@ struct EpisodeRowView: View {
                 // Progress bar
                 if episode.progress > 0, !episode.completed {
                     GeometryReader { geo in
+                        let w = max(0, geo.size.width * episode.progress)
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color.secondary.opacity(0.2)).frame(height: 3)
                             Capsule().fill(Color.accentColor)
-                                .frame(width: geo.size.width * episode.progress, height: 3)
+                                .frame(width: w, height: 3)
                         }
                     }
                     .frame(height: 3)
                 }
             }
+            .onTapGesture { onTap?() }
 
             Spacer()
 

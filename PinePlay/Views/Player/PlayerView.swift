@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import Combine
 
 struct PlayerView: View {
@@ -9,6 +8,7 @@ struct PlayerView: View {
     @State private var seekValue: Double = 0
     @State private var showQueue = false
     @State private var showPlaybackOptions = false
+    @State private var bufferPulse = false
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.verticalSizeClass) private var vSizeClass
 
@@ -20,6 +20,18 @@ struct PlayerView: View {
                 nowPlayingContent(episode)
             } else {
                 emptyState
+            }
+        }
+        .task(id: player.isLoading) {
+            guard player.isLoading else {
+                withAnimation(.easeInOut(duration: 0.3)) { bufferPulse = false }
+                return
+            }
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.7)) { bufferPulse = true }
+                try? await Task.sleep(for: .milliseconds(700))
+                withAnimation(.easeInOut(duration: 0.7)) { bufferPulse = false }
+                try? await Task.sleep(for: .milliseconds(700))
             }
         }
     }
@@ -117,15 +129,18 @@ struct PlayerView: View {
                     }
                 }
                 .tint(player.artworkAccent)
+                .opacity(bufferPulse ? 0.4 : 1.0)
 
                 HStack {
                     Text(player.formattedTime(player.currentTime))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .opacity(bufferPulse ? 0.3 : 1.0)
                     Spacer()
                     Text("-\(player.formattedTime(max(0, player.duration - player.currentTime)))")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .opacity(bufferPulse ? 0.3 : 1.0)
                 }
             }
 
@@ -299,95 +314,118 @@ struct QueueView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if player.queue.isEmpty {
-                    ContentUnavailableView(
-                        "Queue is Empty",
-                        systemImage: "list.bullet",
-                        description: Text("Long press any episode and choose \"Add to Queue\" or \"Play Next\".")
-                    )
-                } else {
-                    List {
-                        // Currently playing
-                        if let current = player.currentEpisode {
-                            Section("Now Playing") {
-                                HStack(spacing: 12) {
-                                    PodcastArtworkView(url: current.artwork, size: 48, cornerRadius: 8)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(current.title)
-                                            .font(.subheadline.weight(.semibold))
-                                            .lineLimit(2)
-                                        Text(current.podcastName)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "waveform")
-                                        .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
-                                        .foregroundStyle(.tint)
-                                }
-                            }
-                        }
-
-                        // Up next
-                        Section("Up Next") {
-                            ForEach(player.queue) { episode in
-                                HStack(spacing: 12) {
-                                    PodcastArtworkView(url: episode.artwork, size: 48, cornerRadius: 8)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(episode.title)
-                                            .font(.subheadline)
-                                            .lineLimit(2)
-                                        Text(episode.podcastName)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                        Text(episode.formattedDuration)
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                                .swipeActions(edge: .leading) {
-                                    Button {
-                                        player.play(episode: episode, localURL: downloads.localURL(for: episode.id))
-                                        player.queue.removeAll { $0.id == episode.id }
-                                    } label: {
-                                        Label("Play Now", systemImage: "play.fill")
-                                    }
-                                    .tint(.green)
-                                }
-                            }
-                            .onDelete { player.removeFromQueue(at: $0) }
-                            .onMove { player.moveInQueue(from: $0, to: $1) }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                    .environment(\.editMode, .constant(.active))
+        VStack(spacing: 0) {
+            // Header row
+            HStack {
+                if !player.queue.isEmpty {
+                    Button("Clear", role: .destructive) { player.queue.removeAll() }
+                        .font(.subheadline)
                 }
+                Spacer()
+                Text("Queue").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .font(.subheadline.weight(.semibold))
             }
-            .navigationTitle("Queue")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if !player.queue.isEmpty {
-                        Button("Clear", role: .destructive) {
-                            player.queue.removeAll()
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            if !player.queue.isEmpty {
+                Button {
+                    player.playNextInQueue()
+                    dismiss()
+                } label: {
+                    Label("Play Next", systemImage: "forward.end")
+                        .font(.subheadline.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .padding(.bottom, 12)
+            }
+
+            Divider()
+
+            if player.queue.isEmpty {
+                ContentUnavailableView(
+                    "Queue is Empty",
+                    systemImage: "list.bullet",
+                    description: Text("Long press any episode and choose \"Add to Queue\" or \"Play Next\".")
+                )
+            } else {
+                List {
+                    if let current = player.currentEpisode {
+                        Section("Now Playing") {
+                            HStack(spacing: 12) {
+                                PodcastArtworkView(url: current.artwork, size: 48, cornerRadius: 8)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(current.title)
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(2)
+                                    Text(current.podcastName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "waveform")
+                                    .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
+                                    .foregroundStyle(.tint)
+                            }
                         }
                     }
+
+                    Section("Up Next") {
+                        ForEach(player.queue) { episode in
+                            HStack(spacing: 12) {
+                                PodcastArtworkView(url: episode.artwork, size: 48, cornerRadius: 8)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(episode.title)
+                                        .font(.subheadline)
+                                        .lineLimit(2)
+                                    Text(episode.podcastName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text(episode.formattedDuration)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Image(systemName: "play.circle")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                player.play(episode: episode, localURL: downloads.localURL(for: episode.id))
+                                player.queue.removeAll { $0.id == episode.id }
+                                dismiss()
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    if let idx = player.queue.firstIndex(where: { $0.id == episode.id }) {
+                                        player.removeFromQueue(at: IndexSet(integer: idx))
+                                    }
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                        }
+                        .onDelete { player.removeFromQueue(at: $0) }
+                        .onMove { player.moveInQueue(from: $0, to: $1) }
+                    }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
+                .listStyle(.insetGrouped)
+                .environment(\.editMode, .constant(.active))
             }
         }
+        .presentationDragIndicator(.visible)
     }
 }
 
 // MARK: - Episode Notes (HTML-aware, async parse so it never blocks the main thread)
 
-private struct EpisodeNotesView: View {
+struct EpisodeNotesView: View {
     let text: String
     @State private var attributed: AttributedString?
 
@@ -413,7 +451,11 @@ private struct EpisodeNotesView: View {
         .task(id: text) {
             guard text.contains("<"), text.contains(">") else { return }
             attributed = await Task.detached(priority: .utility) {
-                guard let data = text.data(using: .utf8),
+                let styled = """
+                    <style>body { font-family: -apple-system; font-size: 13px; color: inherit; }</style>
+                    \(text)
+                    """
+                guard let data = styled.data(using: .utf8),
                       let ns = try? NSAttributedString(
                           data: data,
                           options: [.documentType: NSAttributedString.DocumentType.html,
