@@ -56,6 +56,15 @@ class AudioPlayerManager: ObservableObject {
     /// Most-recent local playback position per episode — source of truth for resume position.
     /// Updated every time progress is persisted to the server, so it's always ≥ listenDuration.
     private var localProgress: [Int: Double] = [:]
+    /// Timestamp of the last time each episode was played — used to sort Continue Listening.
+    /// Persisted across launches so the order survives app restarts.
+    private(set) var lastListenedDates: [Int: Date] = {
+        guard let raw = UserDefaults.standard.dictionary(forKey: "lastListenedDates") as? [String: Double] else { return [:] }
+        return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in
+            guard let id = Int(k) else { return nil }
+            return (id, Date(timeIntervalSince1970: v))
+        })
+    }()
     var onEpisodeCompleted: ((EpisodeItem) -> Void)?
 
     private var cachedArtwork: MPMediaItemArtwork?
@@ -75,6 +84,12 @@ class AudioPlayerManager: ObservableObject {
         if let data = try? JSONEncoder().encode(episode) {
             UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
         }
+        // Record when this episode was last played so Continue Listening can be sorted
+        // most-recently-listened-first across launches.
+        lastListenedDates[episode.id] = Date()
+        var raw = (UserDefaults.standard.dictionary(forKey: "lastListenedDates") as? [String: Double]) ?? [:]
+        raw["\(episode.id)"] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(raw, forKey: "lastListenedDates")
         isLoading = true
         error = nil
         playInternal(episode: episode, localURL: localURL)
@@ -183,16 +198,17 @@ class AudioPlayerManager: ObservableObject {
             forInterval: CMTime(seconds: 1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            // Already on main queue — no Task wrapper needed
-            guard let self else { return }
-            let s = time.seconds
-            guard !s.isNaN, !s.isInfinite else { return }
-            self.currentTime = s
-            self.scheduleProgressSave()
-            // iOS interpolates elapsed time from playback rate automatically —
-            // only sync Now Playing info every 10 s to avoid pointless system calls
-            if Int(s) % 10 == 0 {
-                self.updateNowPlayingInfo()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let s = time.seconds
+                guard !s.isNaN, !s.isInfinite else { return }
+                self.currentTime = s
+                self.scheduleProgressSave()
+                // iOS interpolates elapsed time from playback rate automatically —
+                // only sync Now Playing info every 10 s to avoid pointless system calls
+                if Int(s) % 10 == 0 {
+                    self.updateNowPlayingInfo()
+                }
             }
         }
 
@@ -379,6 +395,14 @@ class AudioPlayerManager: ObservableObject {
             }
             let t = currentTime
             localProgress[ep.id] = t
+            // Keep UserDefaults in sync so the fallback in Continue Listening is always
+            // fresh — not just when the user explicitly pauses or the app goes to background.
+            UserDefaults.standard.set(Int(t), forKey: "lastPlaybackTime")
+            var updated = ep
+            updated.listenDuration = Int(t)
+            if let data = try? JSONEncoder().encode(updated) {
+                UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
+            }
             try? await PinepodsAPIService.shared.updateEpisodeProgress(
                 episodeId: ep.id,
                 listenDuration: Int(t),
@@ -401,8 +425,12 @@ class AudioPlayerManager: ObservableObject {
         if let data = try? JSONEncoder().encode(updated) {
             UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
         }
-        // Request background execution time so the network call survives app kill/force-quit
-        let bgTask = UIApplication.shared.beginBackgroundTask(withName: "saveProgress") {}
+        // Request background execution time so the network call survives app kill/force-quit.
+        // The expiration handler must also end the task so iOS doesn't leak the assertion.
+        var bgTask = UIBackgroundTaskIdentifier.invalid
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "saveProgress") {
+            UIApplication.shared.endBackgroundTask(bgTask)
+        }
         Task {
             try? await PinepodsAPIService.shared.updateEpisodeProgress(
                 episodeId: id, listenDuration: t, isYoutube: isYT

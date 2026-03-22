@@ -10,6 +10,7 @@ struct FeedView: View {
     @State private var inProgress: [EpisodeItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var selectedEpisode: EpisodeItem?
 
     var body: some View {
         NavigationStack {
@@ -39,6 +40,7 @@ struct FeedView: View {
                                 EpisodeRowView(
                                     episode: episode,
                                     showPodcastName: true,
+                                    onTap: { selectedEpisode = episode },
                                     onPlay: { playEpisode(episode) },
                                     onDownload: { downloadEpisode(episode) },
                                     onDelete: { deleteDownload(episode) },
@@ -75,6 +77,12 @@ struct FeedView: View {
                                             ForEach(inProgress) { episode in
                                                 ContinueListeningCard(episode: episode, onPlay: {
                                                     playEpisode(episode)
+                                                }, onTap: {
+                                                    selectedEpisode = episode
+                                                }, onDismiss: {
+                                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
+                                                        inProgress.removeAll { $0.id == episode.id }
+                                                    }
                                                 }, onMarkCompleted: {
                                                     markCompleted(episode)
                                                 })
@@ -102,6 +110,15 @@ struct FeedView: View {
                 }
             }
             .navigationTitle("Feed")
+            .sheet(item: $selectedEpisode) { ep in
+                EpisodeDetailSheet(
+                    episode: ep,
+                    onPlay: { playEpisode(ep) },
+                    onDownload: { downloadEpisode(ep) },
+                    onDelete: { deleteDownload(ep) },
+                    onToggleCompleted: { toggleCompleted(ep) }
+                )
+            }
         }
         .task {
             await loadFeed()
@@ -121,7 +138,14 @@ struct FeedView: View {
             // Always add the currently playing episode — even if marked completed on the
             // server, the user explicitly pressed play so it belongs in Continue Listening.
             if !inProgress.contains(where: { $0.id == ep.id }) {
-                inProgress.insert(ep, at: 0)
+                inProgress.append(ep)
+            }
+            // Re-sort immediately so the newly-playing episode moves to the front.
+            let dates = AudioPlayerManager.shared.lastListenedDates
+            inProgress = inProgress.sorted { a, b in
+                let da = dates[a.id] ?? .distantPast
+                let db = dates[b.id] ?? .distantPast
+                return da > db
             }
         }
     }
@@ -135,12 +159,12 @@ struct FeedView: View {
             // (e.g. a completed episode the user scrubbed back into — don't drop it).
             var updated = episodes.filter { ($0.listenDuration ?? 0) > 0 && !$0.completed }
             for existing in inProgress where !updated.contains(where: { $0.id == existing.id }) {
-                updated.insert(existing, at: 0)
+                updated.append(existing)
             }
             // Ensure the currently playing episode is always present
             if let playing = AudioPlayerManager.shared.currentEpisode,
                !updated.contains(where: { $0.id == playing.id }) {
-                updated.insert(playing, at: 0)
+                updated.append(playing)
             }
             // Fallback: if the server didn't return the last-played episode with progress yet
             // (e.g. app was killed before the 15 s save fired), use the locally cached copy.
@@ -150,9 +174,15 @@ struct FeedView: View {
                let lastEpisode = try? JSONDecoder().decode(EpisodeItem.self, from: data),
                !updated.contains(where: { $0.id == lastEpisode.id }),
                !episodes.contains(where: { $0.id == lastEpisode.id && $0.completed }) {
-                updated.insert(lastEpisode, at: 0)
+                updated.append(lastEpisode)
             }
-            inProgress = updated
+            // Sort by most recently listened — episodes with no recorded date go to the end.
+            let dates = AudioPlayerManager.shared.lastListenedDates
+            inProgress = updated.sorted { a, b in
+                let da = dates[a.id] ?? .distantPast
+                let db = dates[b.id] ?? .distantPast
+                return da > db
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -214,11 +244,14 @@ struct FeedView: View {
 struct ContinueListeningCard: View {
     let episode: EpisodeItem
     let onPlay: () -> Void
+    var onTap: (() -> Void)? = nil
+    var onDismiss: (() -> Void)? = nil
     var onMarkCompleted: (() -> Void)? = nil
     @EnvironmentObject var player: AudioPlayerManager
 
     @State private var showCheck = false
     @State private var cardOpacity: Double = 1
+    @State private var dragOffset: CGFloat = 0
 
     private var isCurrentEpisode: Bool { player.currentEpisode?.id == episode.id }
     private var progress: Double { isCurrentEpisode ? player.progressFraction : episode.progress }
@@ -229,7 +262,7 @@ struct ContinueListeningCard: View {
                 // Artwork + now-playing indicator
                 ZStack(alignment: .bottomTrailing) {
                     PodcastArtworkView(url: episode.artwork, size: 90, cornerRadius: 10)
-                        .onTapGesture { onPlay() }
+                        .onTapGesture { if let onTap { onTap() } else { onPlay() } }
                     if isCurrentEpisode && player.isPlaying && !showCheck {
                         Image(systemName: "waveform")
                             .symbolEffect(.variableColor.iterative)
@@ -272,7 +305,7 @@ struct ContinueListeningCard: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(2)
                 .frame(width: 90, alignment: .leading)
-                .onTapGesture { onPlay() }
+                .onTapGesture { if let onTap { onTap() } else { onPlay() } }
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -285,6 +318,29 @@ struct ContinueListeningCard: View {
             .frame(width: 90, height: 3)
         }
         .opacity(cardOpacity)
+        .offset(y: dragOffset)
+        .transition(.offset(y: -160).combined(with: .opacity))
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if value.translation.height < 0 {
+                        dragOffset = value.translation.height
+                    }
+                }
+                .onEnded { value in
+                    let distance = value.translation.height
+                    let velocity = value.predictedEndTranslation.height
+                    if distance < -40 || velocity < -300 {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
+                            onDismiss?()
+                        }
+                    } else {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.55)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
     }
 
     private func markPlayed() {
