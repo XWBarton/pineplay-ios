@@ -33,6 +33,9 @@ class AudioPlayerManager: ObservableObject {
     @Published var sleepTimerEnd: Date? = nil
     private var sleepTimerTask: Task<Void, Never>?
 
+    @Published var chapters: [Chapter] = []
+    @Published var currentChapterIndex: Int = -1
+
     @Published var useArtworkAccent: Bool = UserDefaults.standard.object(forKey: "useArtworkAccent") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(useArtworkAccent, forKey: "useArtworkAccent")
@@ -73,6 +76,15 @@ class AudioPlayerManager: ObservableObject {
     private init() {
         configureAudioSession()
         configureRemoteCommands()
+        // Restore the last-playing episode so the Player tab and Continue Listening
+        // survive an app kill. iOS aggressively terminates apps with no active audio.
+        if let data = UserDefaults.standard.data(forKey: "lastPlayingEpisode"),
+           let episode = try? JSONDecoder().decode(EpisodeItem.self, from: data) {
+            currentEpisode = episode
+            let savedTime = UserDefaults.standard.integer(forKey: "lastPlaybackTime")
+            currentTime = savedTime > 0 ? Double(savedTime) : Double(episode.listenDuration ?? 0)
+            duration = Double(episode.duration)
+        }
     }
 
     // MARK: - Playback
@@ -80,6 +92,13 @@ class AudioPlayerManager: ObservableObject {
     func play(episode: EpisodeItem, localURL: URL? = nil) {
         tearDown()
         currentEpisode = episode
+        chapters = []
+        currentChapterIndex = -1
+        Task {
+            let loaded = await ChaptersService.shared.fetchChapters(for: episode)
+            guard currentEpisode?.id == episode.id else { return }
+            self.chapters = loaded
+        }
         // Persist so the mini-player can be restored after an app kill/relaunch
         if let data = try? JSONEncoder().encode(episode) {
             UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
@@ -203,6 +222,7 @@ class AudioPlayerManager: ObservableObject {
                 let s = time.seconds
                 guard !s.isNaN, !s.isInfinite else { return }
                 self.currentTime = s
+                self.updateCurrentChapter()
                 self.scheduleProgressSave()
                 // iOS interpolates elapsed time from playback rate automatically —
                 // only sync Now Playing info every 10 s to avoid pointless system calls
@@ -235,6 +255,12 @@ class AudioPlayerManager: ObservableObject {
     }
 
     func resume() {
+        // After an app kill, currentEpisode is restored from UserDefaults but no
+        // AVPlayer is loaded. Re-load the episode so playback actually starts.
+        if player == nil, let episode = currentEpisode {
+            play(episode: episode, localURL: DownloadManager.shared.localURL(for: episode.id))
+            return
+        }
         player?.rate = Float(playbackRate)
         isPlaying = true
         updateNowPlayingInfo()
@@ -273,6 +299,10 @@ class AudioPlayerManager: ObservableObject {
 
     func skip(by delta: Double) {
         seek(to: currentTime + delta)
+    }
+
+    func seekToChapter(_ chapter: Chapter) {
+        seek(to: chapter.startTime, precise: true)
     }
 
     // MARK: - Queue
@@ -315,6 +345,19 @@ class AudioPlayerManager: ObservableObject {
     }
 
     // MARK: - Private
+
+    private func updateCurrentChapter() {
+        guard !chapters.isEmpty else {
+            if currentChapterIndex != -1 { currentChapterIndex = -1 }
+            return
+        }
+        let t = currentTime
+        var idx = -1
+        for (i, chapter) in chapters.enumerated() {
+            if chapter.startTime <= t { idx = i } else { break }
+        }
+        if idx != currentChapterIndex { currentChapterIndex = idx }
+    }
 
     func refreshAccentColor(for episode: EpisodeItem) async {
         await extractAccentColor(from: episode.artwork)
@@ -383,6 +426,8 @@ class AudioPlayerManager: ObservableObject {
         timeControlCancellable = nil
         cachedArtwork = nil
         cachedArtworkEpisodeId = nil
+        chapters = []
+        currentChapterIndex = -1
     }
 
     private func scheduleProgressSave() {

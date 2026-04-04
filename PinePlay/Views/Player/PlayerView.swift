@@ -8,7 +8,7 @@ struct PlayerView: View {
     @State private var seekValue: Double = 0
     @State private var showQueue = false
     @State private var showPlaybackOptions = false
-    @State private var bufferPulse = false
+    @State private var showChapters = false
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.verticalSizeClass) private var vSizeClass
 
@@ -20,18 +20,6 @@ struct PlayerView: View {
                 nowPlayingContent(episode)
             } else {
                 emptyState
-            }
-        }
-        .task(id: player.isLoading) {
-            guard player.isLoading else {
-                withAnimation(.easeInOut(duration: 0.3)) { bufferPulse = false }
-                return
-            }
-            while !Task.isCancelled {
-                withAnimation(.easeInOut(duration: 0.7)) { bufferPulse = true }
-                try? await Task.sleep(for: .milliseconds(700))
-                withAnimation(.easeInOut(duration: 0.7)) { bufferPulse = false }
-                try? await Task.sleep(for: .milliseconds(700))
             }
         }
     }
@@ -85,18 +73,26 @@ struct PlayerView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showPlaybackOptions = true } label: {
-                    Image(systemName: player.sleepTimerEnd != nil ? "timer" : "ellipsis.circle")
+                HStack(spacing: 16) {
+                    if !player.chapters.isEmpty {
+                        Button { showChapters = true } label: {
+                            Image(systemName: "list.number")
+                        }
+                    }
+                    Button { showPlaybackOptions = true } label: {
+                        Image(systemName: player.sleepTimerEnd != nil ? "timer" : "ellipsis.circle")
+                    }
                 }
             }
         }
         .sheet(isPresented: $showQueue) { QueueView() }
         .sheet(isPresented: $showPlaybackOptions) { PlaybackOptionsSheet() }
+        .sheet(isPresented: $showChapters) { ChaptersSheet() }
     }
 
     @ViewBuilder
     private func playerControls(_ episode: EpisodeItem) -> some View {
-        // Title + podcast
+        // Title + podcast + current chapter
         VStack(spacing: 4) {
             Text(episode.title)
                 .font(.headline)
@@ -106,6 +102,14 @@ struct PlayerView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if player.currentChapterIndex >= 0, player.currentChapterIndex < player.chapters.count {
+                Text(player.chapters[player.currentChapterIndex].title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(player.artworkAccent)
+                    .lineLimit(1)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(.easeInOut(duration: 0.3), value: player.currentChapterIndex)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.top, 16)
@@ -129,19 +133,43 @@ struct PlayerView: View {
                     }
                 }
                 .tint(player.artworkAccent)
-                .opacity(bufferPulse ? 0.4 : 1.0)
+                .opacity(player.isLoading ? 0.35 : 1.0)
+                .animation(.easeInOut(duration: 0.25), value: player.isLoading)
+                .disabled(player.isLoading)
+
+                if player.isLoading {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(player.artworkAccent)
+                        .padding(.top, -8)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else if !player.chapters.isEmpty && player.duration > 0 {
+                    GeometryReader { geo in
+                        let thumbPad: CGFloat = 11
+                        let trackWidth = geo.size.width - thumbPad * 2
+                        ForEach(player.chapters) { chapter in
+                            let frac = CGFloat(chapter.startTime / player.duration)
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.secondary.opacity(0.45))
+                                .frame(width: 2, height: 8)
+                                .offset(x: thumbPad + frac * trackWidth - 1)
+                        }
+                    }
+                    .frame(height: 8)
+                    .padding(.top, -4)
+                }
 
                 HStack {
                     Text(player.formattedTime(player.currentTime))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .opacity(bufferPulse ? 0.3 : 1.0)
                     Spacer()
                     Text("-\(player.formattedTime(max(0, player.duration - player.currentTime)))")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .opacity(bufferPulse ? 0.3 : 1.0)
                 }
+                .opacity(player.isLoading ? 0.35 : 1.0)
+                .animation(.easeInOut(duration: 0.25), value: player.isLoading)
             }
 
             HStack(spacing: 44) {
@@ -191,6 +219,57 @@ struct PlayerView: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 24)
+    }
+}
+
+// MARK: - Chapters Sheet
+
+private struct ChaptersSheet: View {
+    @EnvironmentObject var player: AudioPlayerManager
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(Array(player.chapters.enumerated()), id: \.element.id) { index, chapter in
+                    Button {
+                        player.seekToChapter(chapter)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(chapter.formattedTime)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 52, alignment: .leading)
+                            Text(chapter.title)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                            Spacer()
+                            if index == player.currentChapterIndex {
+                                Image(systemName: "waveform")
+                                    .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
+                                    .foregroundStyle(player.artworkAccent)
+                            }
+                        }
+                    }
+                    .listRowBackground(
+                        index == player.currentChapterIndex
+                            ? player.artworkAccent.opacity(0.08)
+                            : Color.clear
+                    )
+                }
+            }
+            .navigationTitle("Chapters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -439,6 +518,7 @@ struct EpisodeNotesView: View {
             } else if let attr = attributed {
                 Text(attr)
                     .font(.footnote)
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(text)
@@ -462,7 +542,12 @@ struct EpisodeNotesView: View {
                                     .characterEncoding: String.Encoding.utf8.rawValue],
                           documentAttributes: nil
                       ) else { return nil }
-                return try? AttributedString(ns, including: \.uiKit)
+                // Strip explicit foreground colors set by the HTML renderer so that
+                // SwiftUI's .foregroundStyle(.primary) controls the text color in
+                // both light and dark mode.
+                let mutable = NSMutableAttributedString(attributedString: ns)
+                mutable.removeAttribute(.foregroundColor, range: NSRange(location: 0, length: mutable.length))
+                return try? AttributedString(mutable, including: \.uiKit)
             }.value
         }
     }
