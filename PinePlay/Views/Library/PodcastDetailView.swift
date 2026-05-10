@@ -11,8 +11,14 @@ struct PodcastDetailView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var filter: EpisodeFilter = .all
-    @State private var sortOrder: SortOrder = .newestFirst
+    @State private var sortOrder: SortOrder
     @State private var showShuffleQueueSheet = false
+
+    init(podcast: PodcastItem) {
+        self.podcast = podcast
+        let saved = UserDefaults.standard.string(forKey: "sortOrder_\(podcast.id)")
+        self._sortOrder = State(initialValue: SortOrder(rawValue: saved ?? "") ?? .newestFirst)
+    }
     @State private var shuffleQueueCount: Double = 5
     @State private var selectedEpisode: EpisodeItem?
 
@@ -141,6 +147,9 @@ struct PodcastDetailView: View {
         }
         .refreshable { await loadEpisodes() }
         .task { await loadEpisodes() }
+        .onChange(of: sortOrder) { _, new in
+            UserDefaults.standard.set(new.rawValue, forKey: "sortOrder_\(podcast.id)")
+        }
         .sheet(isPresented: $showShuffleQueueSheet) {
             shuffleQueueSheet
         }
@@ -158,8 +167,12 @@ struct PodcastDetailView: View {
     @ViewBuilder
     private var shuffleQueueSheet: some View {
         NavigationStack {
-            let maxCount = min(filteredEpisodes.count, 50)
-            let count = Int(shuffleQueueCount)
+            let maxCount = max(1, min(filteredEpisodes.count, 50))
+            let safeCount = Binding<Double>(
+                get: { min(max(shuffleQueueCount, 1), Double(maxCount)) },
+                set: { shuffleQueueCount = $0 }
+            )
+            let count = Int(safeCount.wrappedValue)
             Form {
                 Section {
                     VStack(spacing: 16) {
@@ -176,17 +189,17 @@ struct PodcastDetailView: View {
                 }
 
                 Section {
-                    Slider(
-                        value: $shuffleQueueCount,
-                        in: 1...Double(maxCount),
-                        step: 1
-                    )
+                    if maxCount > 1 {
+                        Slider(value: safeCount, in: 1...Double(maxCount), step: 1)
+                            .id(maxCount)
+                    }
                     Stepper(
                         "\(count) episode\(count == 1 ? "" : "s")",
-                        value: $shuffleQueueCount,
+                        value: safeCount,
                         in: 1...Double(maxCount),
                         step: 1
                     )
+                    .id(maxCount)
                 } header: {
                     Text("Number of episodes")
                 } footer: {
@@ -204,7 +217,6 @@ struct PodcastDetailView: View {
                 }
             }
             .onAppear {
-                let maxCount = min(filteredEpisodes.count, 50)
                 shuffleQueueCount = min(shuffleQueueCount, Double(maxCount))
             }
         }

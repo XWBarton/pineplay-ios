@@ -56,9 +56,16 @@ class AudioPlayerManager: ObservableObject {
 
     private var progressSaveTask: Task<Void, Never>?
     private var timeControlCancellable: AnyCancellable?
+    private var queuePersistCancellable: AnyCancellable?
     /// Most-recent local playback position per episode — source of truth for resume position.
-    /// Updated every time progress is persisted to the server, so it's always ≥ listenDuration.
-    private var localProgress: [Int: Double] = [:]
+    /// Persisted to UserDefaults so it survives app kills (server saves can lag).
+    var localProgress: [Int: Double] = {
+        guard let raw = UserDefaults.standard.dictionary(forKey: "localProgressMap") as? [String: Double] else { return [:] }
+        return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in
+            guard let id = Int(k) else { return nil }
+            return (id, v)
+        })
+    }()
     /// Timestamp of the last time each episode was played — used to sort Continue Listening.
     /// Persisted across launches so the order survives app restarts.
     private(set) var lastListenedDates: [Int: Date] = {
@@ -74,17 +81,22 @@ class AudioPlayerManager: ObservableObject {
     private var cachedArtworkEpisodeId: Int?
 
     private init() {
+        // Restore queue from previous session
+        if let data = UserDefaults.standard.data(forKey: "playerQueue"),
+           let saved = try? JSONDecoder().decode([EpisodeItem].self, from: data) {
+            queue = saved
+        }
         configureAudioSession()
         configureRemoteCommands()
-        // Restore the last-playing episode so the Player tab and Continue Listening
-        // survive an app kill. iOS aggressively terminates apps with no active audio.
-        if let data = UserDefaults.standard.data(forKey: "lastPlayingEpisode"),
-           let episode = try? JSONDecoder().decode(EpisodeItem.self, from: data) {
-            currentEpisode = episode
-            let savedTime = UserDefaults.standard.integer(forKey: "lastPlaybackTime")
-            currentTime = savedTime > 0 ? Double(savedTime) : Double(episode.listenDuration ?? 0)
-            duration = Double(episode.duration)
+        // Persist queue to UserDefaults whenever it changes
+        queuePersistCancellable = $queue.sink { episodes in
+            if let data = try? JSONEncoder().encode(episodes) {
+                UserDefaults.standard.set(data, forKey: "playerQueue")
+            }
         }
+        // lastPlayingEpisode / lastPlaybackTime are kept in UserDefaults solely as a
+        // fallback for Continue Listening in FeedView (so progress isn't lost if the
+        // server save hadn't landed yet). The player itself starts empty on every launch.
     }
 
     // MARK: - Playback
@@ -128,8 +140,12 @@ class AudioPlayerManager: ObservableObject {
 
         let item = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: item)
-        // Start playing immediately — don't wait for the buffer to fill
-        player?.automaticallyWaitsToMinimizeStalling = false
+        // For local files, disable stall-minimisation so playback starts instantly.
+        // For remote streams, keep the default (true) so AVPlayer buffers ahead —
+        // otherwise the stream can die when the screen locks briefly.
+        if localURL != nil && !isRetry {
+            player?.automaticallyWaitsToMinimizeStalling = false
+        }
 
         // Prefer the live local cache (updated every 15 s) over the server-fetched listenDuration,
         // which may be stale if the episode was recently played without a feed refresh.
@@ -239,6 +255,7 @@ class AudioPlayerManager: ObservableObject {
                 self.isPlaying = false
                 self.currentTime = 0
                 self.localProgress.removeValue(forKey: ep.id)
+                self.saveLocalProgressMap()
                 self.onEpisodeCompleted?(ep)
                 self.playNextInQueue()
             }
@@ -264,6 +281,15 @@ class AudioPlayerManager: ObservableObject {
         player?.rate = Float(playbackRate)
         isPlaying = true
         updateNowPlayingInfo()
+    }
+
+    /// Stops playback and clears the player entirely. Used when an episode is marked as played
+    /// while it's currently loaded so the mini-player doesn't linger on a completed episode.
+    func clearPlayer() {
+        tearDown()
+        currentEpisode = nil
+        UserDefaults.standard.removeObject(forKey: "lastPlayingEpisode")
+        UserDefaults.standard.removeObject(forKey: "lastPlaybackTime")
     }
 
     // MARK: - Sleep Timer
@@ -368,7 +394,9 @@ class AudioPlayerManager: ObservableObject {
         // Custom per-show colour overrides artwork extraction
         if let podcastName = currentEpisode?.podcastName,
            let custom = PodcastAccentColors.color(for: podcastName) {
-            artworkAccent = custom
+            var tx = Transaction(animation: .none)
+            tx.disablesAnimations = true
+            withTransaction(tx) { artworkAccent = custom }
             return
         }
         // Use cached image if available, else fetch a small version
@@ -387,7 +415,9 @@ class AudioPlayerManager: ObservableObject {
                   dominantColor(of: img)
               }).value else { return }
 
-        artworkAccent = color
+        var tx = Transaction(animation: .none)
+        tx.disablesAnimations = true
+        withTransaction(tx) { artworkAccent = color }
     }
 
     private func tearDown() {
@@ -395,6 +425,7 @@ class AudioPlayerManager: ObservableObject {
         if let ep = currentEpisode, currentTime > 0 {
             let t = currentTime
             localProgress[ep.id] = t  // always keep the freshest position
+            saveLocalProgressMap()
             UserDefaults.standard.set(Int(t), forKey: "lastPlaybackTime")
             var updated = ep
             updated.listenDuration = Int(t)
@@ -440,6 +471,7 @@ class AudioPlayerManager: ObservableObject {
             }
             let t = currentTime
             localProgress[ep.id] = t
+            saveLocalProgressMap()
             // Keep UserDefaults in sync so the fallback in Continue Listening is always
             // fresh — not just when the user explicitly pauses or the app goes to background.
             UserDefaults.standard.set(Int(t), forKey: "lastPlaybackTime")
@@ -464,6 +496,8 @@ class AudioPlayerManager: ObservableObject {
         // the network call doesn't finish before the app is killed.
         // Also update lastPlayingEpisode with the current time so the card progress bar
         // and resume position are accurate after a restart.
+        localProgress[ep.id] = Double(t)
+        saveLocalProgressMap()
         UserDefaults.standard.set(t, forKey: "lastPlaybackTime")
         var updated = ep
         updated.listenDuration = t
@@ -484,12 +518,60 @@ class AudioPlayerManager: ObservableObject {
         }
     }
 
+    private func saveLocalProgressMap() {
+        let raw = Dictionary(uniqueKeysWithValues: localProgress.map { ("\($0.key)", $0.value) })
+        UserDefaults.standard.set(raw, forKey: "localProgressMap")
+    }
+
     private func configureAudioSession() {
         try? AVAudioSession.sharedInstance().setCategory(
             .playback, mode: .spokenAudio,
             options: [.allowAirPlay, .allowBluetoothHFP, .allowBluetoothA2DP]
         )
         try? AVAudioSession.sharedInstance().setActive(true)
+
+        // Handle audio interruptions (phone calls, Siri, etc.)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let info = notification.userInfo,
+                  let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch type {
+                case .began:
+                    if self.isPlaying {
+                        self.isPlaying = false
+                        self.updateNowPlayingInfo()
+                        self.saveProgressNow()
+                    }
+                case .ended:
+                    let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    if options.contains(.shouldResume) { self.resume() }
+                @unknown default: break
+                }
+            }
+        }
+
+        // Handle route changes — e.g. AirPods going into the case
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let info = notification.userInfo,
+                  let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if reason == .oldDeviceUnavailable && self.isPlaying {
+                    self.pause()
+                }
+            }
+        }
     }
 
     private func configureRemoteCommands() {

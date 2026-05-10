@@ -15,6 +15,7 @@
 		A8AB88F12F6016FB00802E40 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88DA2F6016FB00802E40 /* DownloadManager.swift */; };
 		A8AB88F22F6016FB00802E40 /* PodcastArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88E92F6016FB00802E40 /* PodcastArtworkView.swift */; };
 		A8AB88F32F6016FB00802E40 /* PinepodsAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88DB2F6016FB00802E40 /* PinepodsAPIService.swift */; };
+		A8AB8904301100000000AA01 /* ChaptersService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB8905301100000000AA01 /* ChaptersService.swift */; };
 		A8AB88F42F6016FB00802E40 /* PodcastDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88E32F6016FB00802E40 /* PodcastDetailView.swift */; };
 		A8AB88FF2F6016FB00802E41 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88FE2F6016FB00802E41 /* DownloadsView.swift */; };
 		A8AB88F52F6016FB00802E40 /* PinePodsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88D42F6016FB00802E40 /* PinePodsApp.swift */; };
@@ -33,6 +34,7 @@
 		A8AB88D92F6016FB00802E40 /* AudioPlayerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayerManager.swift; sourceTree = "<group>"; };
 		A8AB88DA2F6016FB00802E40 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		A8AB88DB2F6016FB00802E40 /* PinepodsAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinepodsAPIService.swift; sourceTree = "<group>"; };
+		A8AB8905301100000000AA01 /* ChaptersService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChaptersService.swift; sourceTree = "<group>"; };
 		A8AB88DD2F6016FB00802E40 /* ServerSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSetupView.swift; sourceTree = "<group>"; };
 		A8AB88DE2F6016FB00802E40 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A8AB88E02F6016FB00802E40 /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedView.swift; sourceTree = "<group>"; };
@@ -99,6 +101,7 @@
 				A8AB88D92F6016FB00802E40 /* AudioPlayerManager.swift */,
 				A8AB88DA2F6016FB00802E40 /* DownloadManager.swift */,
 				A8AB88DB2F6016FB00802E40 /* PinepodsAPIService.swift */,
+				A8AB8905301100000000AA01 /* ChaptersService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -239,6 +242,7 @@
 				A8AB88F12F6016FB00802E40 /* DownloadManager.swift in Sources */,
 				A8AB88F22F6016FB00802E40 /* PodcastArtworkView.swift in Sources */,
 				A8AB88F32F6016FB00802E40 /* PinepodsAPIService.swift in Sources */,
+				A8AB8904301100000000AA01 /* ChaptersService.swift in Sources */,
 				A8AB88F42F6016FB00802E40 /* PodcastDetailView.swift in Sources */,
 				A8AB88FF2F6016FB00802E41 /* DownloadsView.swift in Sources */,
 				A8AB88F52F6016FB00802E40 /* PinePodsApp.swift in Sources */,

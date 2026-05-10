@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var player: AudioPlayerManager
     @State private var selectedTab = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -25,26 +26,6 @@ struct ContentView: View {
                 withAnimation {
                     selectedTab = 2
                 }
-            }
-        }
-        .overlay {
-            if player.isLoading {
-                VStack {
-                    Spacer()
-                    HStack(spacing: 10) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("Loading…")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 90)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.spring(duration: 0.3), value: player.isLoading)
             }
         }
     }

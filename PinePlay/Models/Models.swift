@@ -322,6 +322,30 @@ extension Color {
     }
 }
 
+// MARK: - Podcasting 2.0 Chapter
+
+struct Chapter: Identifiable, Equatable {
+    let id: UUID
+    let startTime: Double   // seconds
+    let title: String
+    let imageURL: String?
+    let linkURL: String?
+
+    init(startTime: Double, title: String, imageURL: String? = nil, linkURL: String? = nil) {
+        self.id = UUID()
+        self.startTime = startTime
+        self.title = title
+        self.imageURL = imageURL
+        self.linkURL = linkURL
+    }
+
+    var formattedTime: String {
+        let t = Int(startTime)
+        let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+}
+
 // MARK: - Auto-download settings
 
 struct AutoDownloadSettings: Codable {

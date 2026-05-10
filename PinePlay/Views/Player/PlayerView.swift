@@ -9,6 +9,8 @@ struct PlayerView: View {
     @State private var showQueue = false
     @State private var showPlaybackOptions = false
     @State private var showChapters = false
+    @State private var showingWave = false
+    @State private var loadingEndedAt: Date? = nil
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.verticalSizeClass) private var vSizeClass
 
@@ -117,46 +119,46 @@ struct PlayerView: View {
         // Glass controls card
         VStack(spacing: 16) {
             VStack(spacing: 4) {
-                Slider(
-                    value: isSeeking ? $seekValue : .init(
-                        get: { player.progressFraction },
-                        set: { _ in }
-                    ),
-                    in: 0...1
-                ) { editing in
-                    if editing {
-                        isSeeking = true
-                        seekValue = player.progressFraction
-                    } else {
-                        player.seek(to: seekValue * player.duration, precise: true)
-                        isSeeking = false
-                    }
-                }
-                .tint(player.artworkAccent)
-                .opacity(player.isLoading ? 0.35 : 1.0)
-                .animation(.easeInOut(duration: 0.25), value: player.isLoading)
-                .disabled(player.isLoading)
-
-                if player.isLoading {
-                    ProgressView()
-                        .progressViewStyle(.linear)
+                if showingWave {
+                    WaveLoadingBar(color: player.artworkAccent, loadingEndedAt: loadingEndedAt)
+                        .frame(height: 31)
+                        .transition(.opacity)
+                } else {
+                    VStack(spacing: 0) {
+                        Slider(
+                            value: isSeeking ? $seekValue : .init(
+                                get: { player.progressFraction },
+                                set: { _ in }
+                            ),
+                            in: 0...1
+                        ) { editing in
+                            if editing {
+                                isSeeking = true
+                                seekValue = player.progressFraction
+                            } else {
+                                player.seek(to: seekValue * player.duration, precise: true)
+                                isSeeking = false
+                            }
+                        }
                         .tint(player.artworkAccent)
-                        .padding(.top, -8)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                } else if !player.chapters.isEmpty && player.duration > 0 {
-                    GeometryReader { geo in
-                        let thumbPad: CGFloat = 11
-                        let trackWidth = geo.size.width - thumbPad * 2
-                        ForEach(player.chapters) { chapter in
-                            let frac = CGFloat(chapter.startTime / player.duration)
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(Color.secondary.opacity(0.45))
-                                .frame(width: 2, height: 8)
-                                .offset(x: thumbPad + frac * trackWidth - 1)
+
+                        if !player.chapters.isEmpty && player.duration > 0 {
+                            GeometryReader { geo in
+                                let thumbPad: CGFloat = 11
+                                let trackWidth = geo.size.width - thumbPad * 2
+                                ForEach(player.chapters) { chapter in
+                                    let frac = CGFloat(chapter.startTime / player.duration)
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(Color.secondary.opacity(0.45))
+                                        .frame(width: 2, height: 8)
+                                        .offset(x: thumbPad + frac * trackWidth - 1)
+                                }
+                            }
+                            .frame(height: 8)
+                            .padding(.top, -4)
                         }
                     }
-                    .frame(height: 8)
-                    .padding(.top, -4)
+                    .transition(.opacity)
                 }
 
                 HStack {
@@ -168,8 +170,24 @@ struct PlayerView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                .opacity(player.isLoading ? 0.35 : 1.0)
-                .animation(.easeInOut(duration: 0.25), value: player.isLoading)
+                .opacity(showingWave ? 0.35 : 1.0)
+                .animation(.easeInOut(duration: 0.25), value: showingWave)
+            }
+            .animation(.easeInOut(duration: 0.45), value: showingWave)
+            .onAppear { showingWave = player.isLoading }
+            .onChange(of: player.isLoading) { _, loading in
+                if loading {
+                    loadingEndedAt = nil
+                    showingWave = true
+                } else {
+                    loadingEndedAt = Date()
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_800_000_000)
+                        guard !player.isLoading else { return }
+                        showingWave = false
+                        loadingEndedAt = nil
+                    }
+                }
             }
 
             HStack(spacing: 44) {
@@ -219,6 +237,48 @@ struct PlayerView: View {
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 24)
+    }
+}
+
+// MARK: - Wave Loading Bar
+
+private struct WaveLoadingBar: View {
+    let color: Color
+    let loadingEndedAt: Date?
+    private let decayDuration: Double = 1.6
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate * 3.0
+            let amplitudeScale: CGFloat = {
+                guard let ended = loadingEndedAt else { return 1.0 }
+                let t = timeline.date.timeIntervalSince(ended) / decayDuration
+                return max(0, CGFloat(1.0 - t))
+            }()
+            Canvas { context, size in
+                let w = size.width
+                let h = size.height
+                let midY = h / 2
+                // Amplitude uses almost the full half-height so the string
+                // reaches near the edges at full energy, then collapses flat.
+                let amp = h * 0.28 * amplitudeScale
+
+                var path = Path()
+                path.move(to: CGPoint(x: 0, y: midY + amp * sin(phase)))
+                var px: Double = 0
+                while px <= w {
+                    let y = midY + amp * sin((px / w) * 20 * .pi + phase)
+                    path.addLine(to: CGPoint(x: px, y: y))
+                    px += 2
+                }
+
+                context.stroke(
+                    path,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+                )
+            }
+        }
     }
 }
 

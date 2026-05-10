@@ -129,7 +129,7 @@ struct EpisodeDetailSheet: View {
                             dismiss()
                         }
                         if downloads.locallyDownloaded.contains(episode.id) {
-                            actionButton(icon: "arrow.down.circle.fill", label: "Downloaded", tint: .accentColor) {
+                            actionButton(icon: "checkmark.circle.fill", label: "Downloaded", tint: .accentColor) {
                                 onDelete()
                             }
                         } else {
@@ -354,7 +354,7 @@ struct EpisodeRowView: View {
             }
         } else if isLocallyDownloaded {
             Button(action: onDelete) {
-                Image(systemName: "arrow.down.circle.fill")
+                Image(systemName: "checkmark.circle.fill")
                     .font(.body)
                     .foregroundStyle(.tint)
             }

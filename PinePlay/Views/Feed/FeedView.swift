@@ -161,6 +161,14 @@ struct FeedView: View {
             for existing in inProgress where !updated.contains(where: { $0.id == existing.id }) {
                 updated.append(existing)
             }
+            // Rescue episodes whose progress was saved locally but not yet synced to the server.
+            // localProgress persists across launches so episodes don't vanish after an app kill.
+            let localProgress = AudioPlayerManager.shared.localProgress
+            for episode in episodes where !episode.completed && !updated.contains(where: { $0.id == episode.id }) {
+                if let localSecs = localProgress[episode.id], localSecs > 0 {
+                    updated.append(episode)
+                }
+            }
             // Ensure the currently playing episode is always present
             if let playing = AudioPlayerManager.shared.currentEpisode,
                !updated.contains(where: { $0.id == playing.id }) {
@@ -209,6 +217,10 @@ struct FeedView: View {
         if let idx = episodes.firstIndex(where: { $0.id == episode.id }) {
             episodes[idx].completed = true
         }
+        // If this episode is in the player, remove it
+        if AudioPlayerManager.shared.currentEpisode?.id == episode.id {
+            AudioPlayerManager.shared.clearPlayer()
+        }
         Task {
             try? await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
         }
@@ -224,6 +236,10 @@ struct FeedView: View {
                !inProgress.contains(where: { $0.id == playing.id }) {
                 inProgress.insert(playing, at: 0)
             }
+        }
+        // If marking as completed and this episode is in the player, remove it
+        if !episode.completed, AudioPlayerManager.shared.currentEpisode?.id == episode.id {
+            AudioPlayerManager.shared.clearPlayer()
         }
         Task {
             do {
@@ -254,7 +270,13 @@ struct ContinueListeningCard: View {
     @State private var dragOffset: CGFloat = 0
 
     private var isCurrentEpisode: Bool { player.currentEpisode?.id == episode.id }
-    private var progress: Double { isCurrentEpisode ? player.progressFraction : episode.progress }
+    private var progress: Double {
+        if isCurrentEpisode { return player.progressFraction }
+        if let localSecs = player.localProgress[episode.id], episode.duration > 0 {
+            return min(1.0, localSecs / Double(episode.duration))
+        }
+        return episode.progress
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
