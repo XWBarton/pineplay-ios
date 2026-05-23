@@ -87,7 +87,7 @@ struct ServerConfig: Codable {
 
 // MARK: - Domain Models
 
-struct PodcastItem: Identifiable, Hashable {
+struct PodcastItem: Identifiable, Hashable, Codable {
     let id: Int
     let name: String
     let artworkURL: String?

@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var api: PinepodsAPIService
     @EnvironmentObject var downloads: DownloadManager
     @EnvironmentObject var player: AudioPlayerManager
+    @EnvironmentObject var network: NetworkMonitor
     @Environment(\.dismiss) var dismiss
 
     @State private var autoDownloadEnabled: Bool
@@ -62,6 +63,14 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(!autoDownloadEnabled)
+                }
+
+                Section {
+                    Toggle("Offline Mode", isOn: $network.offlineModeEnabled)
+                } header: {
+                    Text("Connectivity")
+                } footer: {
+                    Text("Show only downloaded episodes and skip network requests. Turns on automatically when there is no connection.")
                 }
 
                 Section("Storage") {

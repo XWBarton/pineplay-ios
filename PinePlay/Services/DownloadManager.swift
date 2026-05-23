@@ -10,6 +10,18 @@ class DownloadManager: NSObject, ObservableObject {
     @Published var downloadingEpisodes: [Int: EpisodeItem] = [:]
     /// Persisted metadata for all downloaded episodes — available offline.
     @Published var episodeMetadata: [Int: EpisodeItem] = [:]
+    /// Cached podcast list — populated when online, used to render the library when offline.
+    @Published var cachedPodcasts: [PodcastItem] = []
+
+    /// Podcasts that have at least one locally-downloaded episode — the offline library view.
+    var offlinePodcasts: [PodcastItem] {
+        let downloadedNames = Set(
+            episodeMetadata.values
+                .filter { locallyDownloaded.contains($0.id) }
+                .map(\.podcastName)
+        )
+        return cachedPodcasts.filter { downloadedNames.contains($0.name) }
+    }
 
     private var backgroundSession: URLSession!
     private var episodeIdToTask: [Int: URLSessionDownloadTask] = [:]
@@ -44,15 +56,29 @@ class DownloadManager: NSObject, ObservableObject {
         loadLocalDownloads()
         loadTaskMap()
         loadEpisodeMetadata()
+        loadCachedPodcasts()
     }
 
     func localURL(for episodeId: Int) -> URL? {
-        let url = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).audio")
-        guard locallyDownloaded.contains(episodeId),
-              FileManager.default.fileExists(atPath: url.path),
-              let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
-              size > 1000 else { return nil }
-        return url
+        guard locallyDownloaded.contains(episodeId) else { return nil }
+        for ext in ["mp3", "audio"] {
+            let url = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).\(ext)")
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+                  size > 1_000_000 else { continue }   // 1 MB minimum — rejects HTML error pages
+            return url
+        }
+        return nil
+    }
+
+    /// Returns the file URL for any downloaded audio file regardless of minimum size — used for
+    /// display (file size label, deletion) where we still want to show/remove partial files.
+    func fileURL(for episodeId: Int) -> URL? {
+        for ext in ["mp3", "audio"] {
+            let url = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).\(ext)")
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 
     func isDownloading(_ episodeId: Int) -> Bool {
@@ -85,8 +111,10 @@ class DownloadManager: NSObject, ObservableObject {
     }
 
     func deleteLocalDownload(_ episodeId: Int) {
-        let url = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).audio")
-        try? FileManager.default.removeItem(at: url)
+        for ext in ["mp3", "audio"] {
+            let url = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).\(ext)")
+            try? FileManager.default.removeItem(at: url)
+        }
         locallyDownloaded.remove(episodeId)
         episodeMetadata.removeValue(forKey: episodeId)
         manuallyDeleted.insert(episodeId)
@@ -114,9 +142,23 @@ class DownloadManager: NSObject, ObservableObject {
     private func loadLocalDownloads() {
         let dir = DownloadManager.episodesDirectory
         let ids = (UserDefaults.standard.array(forKey: "locallyDownloadedEpisodes") as? [Int]) ?? []
-        locallyDownloaded = Set(ids.filter {
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent("\($0).audio").path)
+        var found = Set(ids.filter { id in
+            ["mp3", "audio"].contains { ext in
+                FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(id).\(ext)").path)
+            }
         })
+        // Recover files that are on disk but weren't persisted (e.g. app killed after file
+        // write but before UserDefaults save).
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for file in files {
+                let name = (file as NSString).deletingPathExtension
+                let ext = (file as NSString).pathExtension
+                guard ["mp3", "audio"].contains(ext), let id = Int(name) else { continue }
+                found.insert(id)
+            }
+        }
+        locallyDownloaded = found
+        persistLocalDownloads()
     }
 
     private func persistLocalDownloads() {
@@ -138,6 +180,19 @@ class DownloadManager: NSObject, ObservableObject {
         if let data = try? JSONEncoder().encode(episodeMetadata) {
             UserDefaults.standard.set(data, forKey: "downloadedEpisodeMetadata")
         }
+    }
+
+    func cachePodcasts(_ podcasts: [PodcastItem]) {
+        cachedPodcasts = podcasts
+        if let data = try? JSONEncoder().encode(podcasts) {
+            UserDefaults.standard.set(data, forKey: "cachedPodcasts")
+        }
+    }
+
+    private func loadCachedPodcasts() {
+        guard let data = UserDefaults.standard.data(forKey: "cachedPodcasts"),
+              let decoded = try? JSONDecoder().decode([PodcastItem].self, from: data) else { return }
+        cachedPodcasts = decoded
     }
 
     /// Backfill metadata for locally-downloaded episodes that have no persisted metadata
@@ -167,8 +222,20 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let taskId = downloadTask.taskIdentifier
         guard let episodeId = taskMap.get(taskId) else { return }
 
+        // Reject HTTP error responses — their body (usually HTML) must not be saved as audio.
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            print("Download for episode \(episodeId) failed — HTTP \(http.statusCode)")
+            taskMap.remove(taskId)
+            Task { @MainActor [self] in
+                downloadProgress.removeValue(forKey: episodeId)
+                episodeIdToTask.removeValue(forKey: episodeId)
+                downloadingEpisodes.removeValue(forKey: episodeId)
+            }
+            return
+        }
+
         // Save file synchronously NOW — iOS deletes `location` after this method returns
-        let dest = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).audio")
+        let dest = DownloadManager.episodesDirectory.appendingPathComponent("\(episodeId).mp3")
         do {
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.copyItem(at: location, to: dest)

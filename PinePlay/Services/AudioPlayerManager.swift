@@ -200,8 +200,9 @@ class AudioPlayerManager: ObservableObject {
                         }
                     }
                 case .failed:
-                    if localURL != nil && !isRetry {
-                        print("Local playback failed, retrying as stream: \(item.error?.localizedDescription ?? "")")
+                    if localURL != nil && !isRetry && NetworkMonitor.shared.isConnected {
+                        // Local file failed — fall back to remote stream only when online.
+                        // Offline, the stream would fail too and the user just gets a confusing error.
                         self.statusCancellable = nil
                         self.playInternal(episode: episode, localURL: nil, isRetry: true)
                     } else {
@@ -216,7 +217,11 @@ class AudioPlayerManager: ObservableObject {
         timeControlCancellable = player?.publisher(for: \.timeControlStatus)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
-                Task { @MainActor [weak self] in
+                // Use assumeIsolated (synchronous) rather than Task to preserve ordering.
+                // Async tasks can execute out-of-order when status transitions happen
+                // rapidly (e.g. local file: paused → waiting → playing in quick succession),
+                // which can leave isLoading stuck as true.
+                MainActor.assumeIsolated {
                     self?.isLoading = status == .waitingToPlayAtSpecifiedRate
                 }
             }
@@ -516,6 +521,11 @@ class AudioPlayerManager: ObservableObject {
             )
             UIApplication.shared.endBackgroundTask(bgTask)
         }
+    }
+
+    func resetProgress(for episodeId: Int) {
+        localProgress.removeValue(forKey: episodeId)
+        saveLocalProgressMap()
     }
 
     private func saveLocalProgressMap() {

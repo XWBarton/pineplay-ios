@@ -6,6 +6,7 @@ struct PodcastDetailView: View {
     @EnvironmentObject var api: PinepodsAPIService
     @EnvironmentObject var player: AudioPlayerManager
     @EnvironmentObject var downloads: DownloadManager
+    @EnvironmentObject var network: NetworkMonitor
 
     @State private var episodes: [EpisodeItem] = []
     @State private var isLoading = false
@@ -107,7 +108,7 @@ struct PodcastDetailView: View {
                         .swipeActions(edge: .leading) {
                             if !episode.completed {
                                 Button {
-                                    Task { try? await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube) }
+                                    toggleCompleted(episode)
                                 } label: {
                                     Label("Played", systemImage: "checkmark.circle")
                                 }
@@ -147,6 +148,7 @@ struct PodcastDetailView: View {
         }
         .refreshable { await loadEpisodes() }
         .task { await loadEpisodes() }
+        .onChange(of: network.isOffline) { _, _ in Task { await loadEpisodes() } }
         .onChange(of: sortOrder) { _, new in
             UserDefaults.standard.set(new.rawValue, forKey: "sortOrder_\(podcast.id)")
         }
@@ -224,6 +226,12 @@ struct PodcastDetailView: View {
     }
 
     private func loadEpisodes() async {
+        if network.isOffline {
+            episodes = downloads.episodeMetadata.values
+                .filter { $0.podcastName == podcast.name && downloads.locallyDownloaded.contains($0.id) }
+            isLoading = false
+            return
+        }
         isLoading = true
         errorMessage = nil
         do {
@@ -255,7 +263,7 @@ struct PodcastDetailView: View {
     }
 
     private func shuffleToQueue(_ count: Int) {
-        let wasIdle = player.currentEpisode == nil && player.queue.isEmpty
+        let wasIdle = player.currentEpisode == nil
         let shuffled = filteredEpisodes.shuffled().prefix(count)
         for episode in shuffled {
             player.addToQueue(episode)
@@ -269,10 +277,15 @@ struct PodcastDetailView: View {
         if let idx = episodes.firstIndex(where: { $0.id == episode.id }) {
             episodes[idx].completed.toggle()
         }
+        if episode.completed {
+            // Marking as unplayed — wipe local progress so Continue Listening resets
+            AudioPlayerManager.shared.resetProgress(for: episode.id)
+        }
         Task {
             do {
                 if episode.completed {
                     try await api.markEpisodeUncompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
+                    try? await api.updateEpisodeProgress(episodeId: episode.id, listenDuration: 0, isYoutube: episode.isYoutube)
                 } else {
                     try await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
                 }

@@ -4,6 +4,7 @@ struct LibraryView: View {
     @EnvironmentObject var api: PinepodsAPIService
     @EnvironmentObject var player: AudioPlayerManager
     @EnvironmentObject var downloads: DownloadManager
+    @EnvironmentObject var network: NetworkMonitor
 
     @State private var podcasts: [PodcastItem] = []
     @State private var searchEpisodes: [EpisodeItem] = []
@@ -75,6 +76,12 @@ struct LibraryView: View {
                         Button("Retry") { Task { await loadPodcasts() } }
                             .buttonStyle(.borderedProminent)
                     }
+                } else if podcasts.isEmpty && network.isOffline {
+                    ContentUnavailableView(
+                        "No Downloads",
+                        systemImage: "wifi.slash",
+                        description: Text("Download episodes while online to listen offline.")
+                    )
                 } else if podcasts.isEmpty {
                     ContentUnavailableView(
                         "No Podcasts",
@@ -120,11 +127,15 @@ struct LibraryView: View {
             }
         }
         .task { await loadPodcasts() }
+        .onChange(of: network.isOffline) { _, offline in
+            podcasts = offline ? downloads.offlinePodcasts : downloads.cachedPodcasts
+        }
         .task(id: searchText) {
             guard !searchText.isEmpty else {
                 filteredPodcasts = []; episodeTitleMatches = []; episodeNotesMatches = []
                 return
             }
+            guard !network.isOffline else { return }
             // Kick off episode load on first search
             if searchEpisodes.isEmpty && !isLoadingEpisodes {
                 Task { await loadSearchEpisodes() }
@@ -138,12 +149,40 @@ struct LibraryView: View {
 
     // MARK: - Subviews
 
+    private var offlineBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "wifi.slash")
+                .font(.caption.weight(.semibold))
+            Text(network.offlineModeEnabled ? "Offline Mode" : "No Connection")
+                .font(.caption.weight(.semibold))
+            Spacer()
+            Text("Showing downloads only")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
+
     private var podcastGrid: some View {
         ScrollView {
+            if network.isOffline {
+                offlineBanner
+            }
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(podcasts) { podcast in
                     NavigationLink(destination: PodcastDetailView(podcast: podcast)) {
-                        PodcastGridCell(podcast: podcast)
+                        PodcastGridCell(
+                            podcast: podcast,
+                            downloadedCount: network.isOffline
+                                ? downloads.episodeMetadata.values.filter {
+                                    $0.podcastName == podcast.name && downloads.locallyDownloaded.contains($0.id)
+                                }.count
+                                : nil
+                        )
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -369,10 +408,16 @@ struct LibraryView: View {
     }
 
     private func loadPodcasts() async {
+        if network.isOffline {
+            podcasts = downloads.offlinePodcasts
+            isLoading = false
+            return
+        }
         isLoading = true
         errorMessage = nil
         do {
             podcasts = try await api.getPodcasts()
+            downloads.cachePodcasts(podcasts)
             for podcast in podcasts {
                 PodcastFeedURLRegistry.shared.register(podcast.feedURL, for: podcast.name)
             }
@@ -431,6 +476,7 @@ struct LibraryView: View {
 
 struct PodcastGridCell: View {
     let podcast: PodcastItem
+    var downloadedCount: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -448,7 +494,11 @@ struct PodcastGridCell: View {
                         .lineLimit(1)
                 }
 
-                if let count = podcast.episodeCount {
+                if let downloaded = downloadedCount {
+                    Label("\(downloaded) downloaded", systemImage: "arrow.down.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let count = podcast.episodeCount {
                     Text("\(count) episodes")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)

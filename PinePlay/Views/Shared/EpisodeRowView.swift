@@ -128,7 +128,30 @@ struct EpisodeDetailSheet: View {
                             player.addToQueue(episode)
                             dismiss()
                         }
-                        if downloads.locallyDownloaded.contains(episode.id) {
+                        if downloads.isDownloading(episode.id) {
+                            let progress = downloads.downloadProgress[episode.id] ?? 0
+                            Button { downloads.cancelDownload(episode.id) } label: {
+                                VStack(spacing: 6) {
+                                    ZStack {
+                                        Circle()
+                                            .stroke(Color.secondary.opacity(0.3), lineWidth: 3)
+                                            .frame(width: 36, height: 36)
+                                        Circle()
+                                            .trim(from: 0, to: progress)
+                                            .stroke(Color.primary, lineWidth: 3)
+                                            .frame(width: 36, height: 36)
+                                            .rotationEffect(.degrees(-90))
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text("Downloading")
+                                        .font(.caption)
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        } else if downloads.locallyDownloaded.contains(episode.id) {
                             actionButton(icon: "checkmark.circle.fill", label: "Downloaded", tint: .accentColor) {
                                 onDelete()
                             }

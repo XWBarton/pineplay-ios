@@ -22,7 +22,7 @@ struct DownloadsView: View {
 
     private var totalSize: String {
         let bytes = downloads.locallyDownloaded.reduce(0) { sum, id in
-            let url = downloads.episodesDirectory.appendingPathComponent("\(id).audio")
+            guard let url = downloads.fileURL(for: id) else { return sum }
             let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
             return sum + size
         }
@@ -30,7 +30,7 @@ struct DownloadsView: View {
     }
 
     private func fileSize(for id: Int) -> String {
-        let url = downloads.episodesDirectory.appendingPathComponent("\(id).audio")
+        guard let url = downloads.fileURL(for: id) else { return "0 bytes" }
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }

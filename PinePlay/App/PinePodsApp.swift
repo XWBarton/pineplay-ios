@@ -58,6 +58,7 @@ struct PinePodsApp: App {
     @StateObject private var api = PinepodsAPIService.shared
     @StateObject private var player = AudioPlayerManager.shared
     @StateObject private var downloads = DownloadManager.shared
+    @StateObject private var network = NetworkMonitor.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -72,6 +73,7 @@ struct PinePodsApp: App {
             .environmentObject(api)
             .environmentObject(player)
             .environmentObject(downloads)
+            .environmentObject(network)
             .tint(player.artworkAccent)
             .onAppear {
                 player.onEpisodeCompleted = { episode in

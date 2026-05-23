@@ -3,6 +3,7 @@ import Combine
 
 struct PlayerView: View {
     @EnvironmentObject var player: AudioPlayerManager
+    @EnvironmentObject var downloads: DownloadManager
 
     @State private var isSeeking = false
     @State private var seekValue: Double = 0
@@ -104,6 +105,11 @@ struct PlayerView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if downloads.localURL(for: episode.id) != nil {
+                Label("Downloaded", systemImage: "arrow.down.circle.fill")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
             if player.currentChapterIndex >= 0, player.currentChapterIndex < player.chapters.count {
                 Text(player.chapters[player.currentChapterIndex].title)
                     .font(.caption.weight(.medium))
@@ -202,15 +208,18 @@ struct PlayerView: View {
                             .frame(width: 68, height: 68)
                             .shadow(color: player.artworkAccent.opacity(0.35), radius: 10, y: 4)
                         if player.isLoading {
-                            ProgressView().tint(.white).scaleEffect(1.1)
+                            GravityDotLoader(color: .white)
+                                .transition(.opacity.combined(with: .scale))
                         } else {
                             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                                 .font(.title2).foregroundStyle(.white)
                                 .offset(x: player.isPlaying ? 0 : 2)
                                 .contentTransition(.symbolEffect(.replace.byLayer.downUp))
                                 .animation(.spring(duration: 0.3), value: player.isPlaying)
+                                .transition(.opacity.combined(with: .scale))
                         }
                     }
+                    .animation(.easeInOut(duration: 0.35), value: player.isLoading)
                 }
                 Button { player.skip(by: 30) } label: {
                     Image(systemName: "goforward.30")
@@ -279,6 +288,37 @@ private struct WaveLoadingBar: View {
                 )
             }
         }
+    }
+}
+
+// MARK: - Gravity Dot Loader
+
+private struct GravityDotLoader: View {
+    let color: Color
+    // Match wave frequency: wave phase = t * 3.0 rad/s
+    private let angularFrequency = 3.0
+    // Kepler eccentricity: controls how pronounced the gravity effect is (0 = uniform, 1 = extreme)
+    private let eccentricity = 0.55
+    private let orbitRadius: CGFloat = 10
+    private let dotRadius: CGFloat = 3.5
+
+    var body: some View {
+        TimelineView(.animation) { tl in
+            let tau = tl.date.timeIntervalSinceReferenceDate * angularFrequency
+            // Kepler equation: slow at top (theta=0), fast at bottom (theta=π)
+            let theta = tau - eccentricity * sin(tau)
+            let x = orbitRadius * sin(theta)
+            let y = -orbitRadius * cos(theta)
+            Canvas { ctx, size in
+                let cx = size.width / 2 + x
+                let cy = size.height / 2 + y
+                let rect = CGRect(x: cx - dotRadius, y: cy - dotRadius,
+                                  width: dotRadius * 2, height: dotRadius * 2)
+                ctx.fill(Path(ellipseIn: rect), with: .color(color))
+            }
+        }
+        .frame(width: (orbitRadius + dotRadius) * 2 + 4,
+               height: (orbitRadius + dotRadius) * 2 + 4)
     }
 }
 

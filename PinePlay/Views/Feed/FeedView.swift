@@ -4,10 +4,15 @@ import Combine
 struct FeedView: View {
     @EnvironmentObject var api: PinepodsAPIService
     @EnvironmentObject var downloads: DownloadManager
+    @EnvironmentObject var network: NetworkMonitor
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var episodes: [EpisodeItem] = []
     @State private var inProgress: [EpisodeItem] = []
+    @State private var dismissedIds: Set<Int> = {
+        let arr = UserDefaults.standard.array(forKey: "dismissedContinueListeningIds") as? [Int] ?? []
+        return Set(arr)
+    }()
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedEpisode: EpisodeItem?
@@ -49,7 +54,7 @@ struct FeedView: View {
                                 .swipeActions(edge: .leading) {
                                     if !episode.completed {
                                         Button {
-                                            Task { try? await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube) }
+                                            toggleCompleted(episode)
                                         } label: {
                                             Label("Played", systemImage: "checkmark.circle")
                                         }
@@ -83,6 +88,8 @@ struct FeedView: View {
                                                     withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
                                                         inProgress.removeAll { $0.id == episode.id }
                                                     }
+                                                    dismissedIds.insert(episode.id)
+                                                    UserDefaults.standard.set(Array(dismissedIds), forKey: "dismissedContinueListeningIds")
                                                 }, onMarkCompleted: {
                                                     markCompleted(episode)
                                                 })
@@ -129,12 +136,19 @@ struct FeedView: View {
                 Task { await loadFeed() }
             }
         }
+        .onChange(of: network.isOffline) { _, _ in Task { await loadFeed() } }
         // onReceive subscribes to the specific @Published property, not the whole player,
         // so FeedView doesn't re-render on every currentTime tick.
         // @Published emits the current value immediately on subscription — so this fires
         // even if the episode was already playing before Feed tab was ever opened.
         .onReceive(AudioPlayerManager.shared.$currentEpisode) { episode in
             guard let ep = episode else { return }
+            // Playing an episode is explicit user intent — remove from dismissed so it
+            // reappears in Continue Listening.
+            if dismissedIds.contains(ep.id) {
+                dismissedIds.remove(ep.id)
+                UserDefaults.standard.set(Array(dismissedIds), forKey: "dismissedContinueListeningIds")
+            }
             // Always add the currently playing episode — even if marked completed on the
             // server, the user explicitly pressed play so it belongs in Continue Listening.
             if !inProgress.contains(where: { $0.id == ep.id }) {
@@ -151,6 +165,13 @@ struct FeedView: View {
     }
 
     private func loadFeed() async {
+        if network.isOffline {
+            episodes = downloads.episodeMetadata.values
+                .filter { downloads.locallyDownloaded.contains($0.id) }
+                .sorted { $0.pubDate > $1.pubDate }
+            isLoading = false
+            return
+        }
         isLoading = true
         errorMessage = nil
         do {
@@ -185,12 +206,15 @@ struct FeedView: View {
                 updated.append(lastEpisode)
             }
             // Sort by most recently listened — episodes with no recorded date go to the end.
+            // Filter out episodes the user has dismissed (they re-appear only when played again).
             let dates = AudioPlayerManager.shared.lastListenedDates
-            inProgress = updated.sorted { a, b in
-                let da = dates[a.id] ?? .distantPast
-                let db = dates[b.id] ?? .distantPast
-                return da > db
-            }
+            inProgress = updated
+                .filter { !dismissedIds.contains($0.id) }
+                .sorted { a, b in
+                    let da = dates[a.id] ?? .distantPast
+                    let db = dates[b.id] ?? .distantPast
+                    return da > db
+                }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -230,6 +254,10 @@ struct FeedView: View {
         // Optimistic update — flip locally so UI responds instantly
         if let idx = episodes.firstIndex(where: { $0.id == episode.id }) {
             episodes[idx].completed.toggle()
+            if episode.completed {
+                // Marking as unplayed — reset listen progress so it leaves Continue Listening
+                episodes[idx].listenDuration = 0
+            }
             inProgress = episodes.filter { ($0.listenDuration ?? 0) > 0 && !$0.completed }
             if let playing = AudioPlayerManager.shared.currentEpisode,
                !playing.completed,
@@ -241,10 +269,15 @@ struct FeedView: View {
         if !episode.completed, AudioPlayerManager.shared.currentEpisode?.id == episode.id {
             AudioPlayerManager.shared.clearPlayer()
         }
+        if episode.completed {
+            // Marking as unplayed — also wipe local progress cache
+            AudioPlayerManager.shared.resetProgress(for: episode.id)
+        }
         Task {
             do {
                 if episode.completed {
                     try await api.markEpisodeUncompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
+                    try? await api.updateEpisodeProgress(episodeId: episode.id, listenDuration: 0, isYoutube: episode.isYoutube)
                 } else {
                     try await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
                 }
