@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import BackgroundTasks
+import UserNotifications
 
 private let feedRefreshIdentifier = "com.pinepods.feed.refresh"
 
@@ -12,6 +13,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: feedRefreshIdentifier, using: nil) { task in
             Self.handleFeedRefresh(task: task as! BGAppRefreshTask)
         }
+        #if DEBUG
+        Self.scheduleDevCertExpiryNotificationIfNeeded()
+        #endif
         return true
     }
 
@@ -24,6 +28,28 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             DownloadManager.shared.backgroundCompletionHandler = completionHandler
         }
     }
+
+    #if DEBUG
+    static func scheduleDevCertExpiryNotificationIfNeeded() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            center.getPendingNotificationRequests { pending in
+                guard !pending.contains(where: { $0.identifier == "devCertExpiry" }) else { return }
+                let content = UNMutableNotificationContent()
+                content.title = "Dev certificate expiring tomorrow"
+                content.body = "Re-sign PinePlay in Xcode to keep using it."
+                content.sound = .default
+                let trigger = UNTimeIntervalNotificationTrigger(
+                    timeInterval: 6 * 24 * 60 * 60,
+                    repeats: false
+                )
+                let request = UNNotificationRequest(identifier: "devCertExpiry", content: content, trigger: trigger)
+                center.add(request)
+            }
+        }
+    }
+    #endif
 
     static func scheduleFeedRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: feedRefreshIdentifier)

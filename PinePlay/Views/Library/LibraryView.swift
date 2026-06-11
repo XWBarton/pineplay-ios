@@ -396,7 +396,7 @@ struct LibraryView: View {
         let shuffled = pool.shuffled().prefix(count)
         switch libraryShuffleTarget {
         case .queue:
-            let wasIdle = player.currentEpisode == nil && player.queue.isEmpty
+            let wasIdle = player.currentEpisode == nil
             for ep in shuffled { player.addToQueue(ep) }
             if wasIdle { player.playNextInQueue() }
         case .download:

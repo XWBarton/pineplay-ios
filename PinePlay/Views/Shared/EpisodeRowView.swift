@@ -109,12 +109,16 @@ struct EpisodeDetailSheet: View {
                     .padding(.horizontal)
 
                     HStack(spacing: 32) {
+                        let isCurrentPlaying = player.currentEpisode?.id == episode.id && player.isPlaying
                         actionButton(
-                            icon: player.currentEpisode?.id == episode.id && player.isPlaying
-                                ? "pause.circle.fill" : "play.circle.fill",
-                            label: "Play"
+                            icon: isCurrentPlaying ? "pause.circle.fill" : "play.circle.fill",
+                            label: isCurrentPlaying ? "Pause" : "Play"
                         ) {
-                            onPlay()
+                            if player.currentEpisode?.id == episode.id {
+                                player.togglePlayPause()
+                            } else {
+                                onPlay()
+                            }
                             dismiss()
                         }
                         actionButton(
@@ -335,6 +339,16 @@ struct EpisodeRowView: View {
                     Label("Mark as Unplayed", systemImage: "circle")
                 } else {
                     Label("Mark as Played", systemImage: "checkmark.circle")
+                }
+            }
+
+            let hasProgress = !episode.completed &&
+                (episode.progress > 0 || (player.localProgress[episode.id] ?? 0) > 0)
+            if hasProgress {
+                Button(role: .destructive) {
+                    player.resetProgress(for: episode.id)
+                } label: {
+                    Label("Reset Progress", systemImage: "arrow.counterclockwise")
                 }
             }
 

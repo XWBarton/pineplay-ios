@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A8AB8920303000000000AA01 /* SiriIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB8921303000000000AA01 /* SiriIntents.swift */; };
 		A8AB88EC2F6016FB00802E40 /* ServerSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88DD2F6016FB00802E40 /* ServerSetupView.swift */; };
 		A8AB88ED2F6016FB00802E40 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88D72F6016FB00802E40 /* Models.swift */; };
 		A8AB88EE2F6016FB00802E40 /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AB88E02F6016FB00802E40 /* FeedView.swift */; };
@@ -28,6 +29,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A8AB8921303000000000AA01 /* SiriIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriIntents.swift; sourceTree = "<group>"; };
 		A8AB88C52F60161500802E40 /* PinePlay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PinePlay.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8AB88D32F6016FB00802E40 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A8AB88D42F6016FB00802E40 /* PinePodsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinePodsApp.swift; sourceTree = "<group>"; };
@@ -67,9 +69,18 @@
 				A8AB88D82F6016FB00802E40 /* Models */,
 				A8AB88DC2F6016FB00802E40 /* Services */,
 				A8AB88EB2F6016FB00802E40 /* Views */,
+				A8AB8922303000000000AA01 /* Intents */,
 					A8AB8900301000000000AA01 /* Assets.xcassets */,
 				A8AB88C62F60161500802E40 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		A8AB8922303000000000AA01 /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				A8AB8921303000000000AA01 /* SiriIntents.swift */,
+			);
+			path = Intents;
 			sourceTree = "<group>";
 		};
 		A8AB88C62F60161500802E40 /* Products */ = {
@@ -254,6 +265,7 @@
 				A8AB88F72F6016FB00802E40 /* EpisodeRowView.swift in Sources */,
 				A8AB88F82F6016FB00802E40 /* ContentView.swift in Sources */,
 				A8AB88F92F6016FB00802E40 /* SettingsView.swift in Sources */,
+				A8AB8920303000000000AA01 /* SiriIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

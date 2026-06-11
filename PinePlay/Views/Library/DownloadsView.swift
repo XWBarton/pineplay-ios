@@ -5,6 +5,14 @@ struct DownloadsView: View {
     @EnvironmentObject var player: AudioPlayerManager
     @Environment(\.dismiss) var dismiss
 
+    @State private var sortOrder: DownloadSort = .newestFirst
+
+    private enum DownloadSort: String, CaseIterable {
+        case newestFirst = "Newest First"
+        case oldestFirst = "Oldest First"
+        case byShow = "By Show"
+    }
+
     private var activeDownloads: [(episode: EpisodeItem?, id: Int, progress: Double)] {
         downloads.downloadProgress.map { (
             episode: downloads.downloadingEpisodes[$0.key] ?? downloads.episodeMetadata[$0.key],
@@ -14,10 +22,33 @@ struct DownloadsView: View {
         .sorted { $0.id < $1.id }
     }
 
-    private var completedEpisodes: [EpisodeItem] {
-        downloads.locallyDownloaded
-            .compactMap { downloads.episodeMetadata[$0] }
-            .sorted { $0.pubDate > $1.pubDate }
+    private var sortedEpisodes: [EpisodeItem] {
+        let base = downloads.locallyDownloaded.compactMap { downloads.episodeMetadata[$0] }
+        switch sortOrder {
+        case .newestFirst:
+            return base.sorted { $0.pubDate > $1.pubDate }
+        case .oldestFirst:
+            return base.sorted { $0.pubDate < $1.pubDate }
+        case .byShow:
+            return base.sorted {
+                if $0.podcastName != $1.podcastName { return $0.podcastName < $1.podcastName }
+                return $0.pubDate > $1.pubDate
+            }
+        }
+    }
+
+    private var episodesByShow: [(show: String, episodes: [EpisodeItem])] {
+        var groups: [(show: String, episodes: [EpisodeItem])] = []
+        var index: [String: Int] = [:]
+        for ep in sortedEpisodes {
+            if let i = index[ep.podcastName] {
+                groups[i].episodes.append(ep)
+            } else {
+                index[ep.podcastName] = groups.count
+                groups.append((show: ep.podcastName, episodes: [ep]))
+            }
+        }
+        return groups
     }
 
     private var totalSize: String {
@@ -33,6 +64,39 @@ struct DownloadsView: View {
         guard let url = downloads.fileURL(for: id) else { return "0 bytes" }
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    @ViewBuilder
+    private func episodeRow(_ episode: EpisodeItem) -> some View {
+        HStack(spacing: 12) {
+            PodcastArtworkView(url: episode.artwork, size: 44, cornerRadius: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(episode.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                if sortOrder != .byShow {
+                    Text(episode.podcastName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(fileSize(for: episode.id))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            Button {
+                let localURL = downloads.localURL(for: episode.id)
+                player.play(episode: episode, localURL: localURL)
+                dismiss()
+            } label: {
+                Image(systemName: "play.circle")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     var body: some View {
@@ -51,7 +115,6 @@ struct DownloadsView: View {
                                             .fill(Color.secondary.opacity(0.2))
                                             .frame(width: 44, height: 44)
                                     }
-                                    // Progress ring overlay
                                     ZStack {
                                         Circle()
                                             .stroke(Color.black.opacity(0.35), lineWidth: 3)
@@ -94,57 +157,54 @@ struct DownloadsView: View {
                     }
                 }
 
-                // Completed downloads
-                if !completedEpisodes.isEmpty {
-                    Section {
-                        ForEach(completedEpisodes) { episode in
-                            HStack(spacing: 12) {
-                                PodcastArtworkView(url: episode.artwork, size: 44, cornerRadius: 6)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(episode.title)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(episode.podcastName)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                    Text(fileSize(for: episode.id))
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-
-                                Spacer()
-
-                                Button {
-                                    let localURL = downloads.localURL(for: episode.id)
-                                    player.play(episode: episode, localURL: localURL)
-                                    dismiss()
-                                } label: {
-                                    Image(systemName: "play.circle")
-                                        .font(.title3)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .onDelete { offsets in
-                            let ids = offsets.map { completedEpisodes[$0].id }
-                            ids.forEach { downloads.deleteLocalDownload($0) }
-                        }
-                    } header: {
-                        Text("Downloaded · \(totalSize)")
-                    }
-                } else if downloads.locallyDownloaded.isEmpty && activeDownloads.isEmpty {
+                // Completed downloads — flat or grouped
+                if sortedEpisodes.isEmpty && activeDownloads.isEmpty {
                     ContentUnavailableView(
                         "No Downloads",
                         systemImage: "arrow.down.circle",
                         description: Text("Downloaded episodes will appear here.")
                     )
+                } else if sortOrder == .byShow {
+                    ForEach(episodesByShow, id: \.show) { group in
+                        Section(group.show) {
+                            ForEach(group.episodes) { episode in
+                                episodeRow(episode)
+                            }
+                            .onDelete { offsets in
+                                let ids = offsets.map { group.episodes[$0].id }
+                                ids.forEach { downloads.deleteLocalDownload($0) }
+                            }
+                        }
+                    }
+                } else if !sortedEpisodes.isEmpty {
+                    Section {
+                        ForEach(sortedEpisodes) { episode in
+                            episodeRow(episode)
+                        }
+                        .onDelete { offsets in
+                            let ids = offsets.map { sortedEpisodes[$0].id }
+                            ids.forEach { downloads.deleteLocalDownload($0) }
+                        }
+                    } header: {
+                        Text("Downloaded · \(totalSize)")
+                    }
                 }
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
             .task { await downloads.syncMissingMetadata() }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Sort", selection: $sortOrder) {
+                            ForEach(DownloadSort.allCases, id: \.self) { order in
+                                Text(order.rawValue).tag(order)
+                            }
+                        }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
