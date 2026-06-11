@@ -31,6 +31,14 @@ class AudioPlayerManager: ObservableObject {
         }
     }
     @Published var sleepTimerEnd: Date? = nil
+    @Published var lastProgressResetId: Int? = nil
+    /// Set when the current episode has less than 30 s of playtime left, so
+    /// Continue Listening can drop it. Cleared if the user scrubs back out of the zone.
+    @Published var nearlyFinishedId: Int? = nil
+    /// Episode that crossed the <30 s-remaining mark while playing. It gets marked as
+    /// played once playback pauses or stops — never mid-playback, so audio is uninterrupted.
+    private var pendingCompletionId: Int? = nil
+    var progressResetIds: Set<Int> = []
     private var sleepTimerTask: Task<Void, Never>?
 
     @Published var chapters: [Chapter] = []
@@ -79,6 +87,7 @@ class AudioPlayerManager: ObservableObject {
 
     private var cachedArtwork: MPMediaItemArtwork?
     private var cachedArtworkEpisodeId: Int?
+    private var seekScrubTimer: Timer?
 
     private init() {
         // Restore queue from previous session
@@ -102,6 +111,7 @@ class AudioPlayerManager: ObservableObject {
     // MARK: - Playback
 
     func play(episode: EpisodeItem, localURL: URL? = nil) {
+        progressResetIds.remove(episode.id)
         tearDown()
         currentEpisode = episode
         chapters = []
@@ -245,6 +255,18 @@ class AudioPlayerManager: ObservableObject {
                 self.currentTime = s
                 self.updateCurrentChapter()
                 self.scheduleProgressSave()
+                // Flag episodes with <30 s left so Continue Listening drops them live;
+                // clear the flag if the user scrubs back out of the end zone.
+                if let ep = self.currentEpisode, self.duration > 0 {
+                    let remaining = self.duration - s
+                    if remaining <= 30, self.nearlyFinishedId != ep.id {
+                        self.nearlyFinishedId = ep.id
+                        self.pendingCompletionId = ep.id
+                    } else if remaining > 30, self.nearlyFinishedId == ep.id {
+                        self.nearlyFinishedId = nil
+                        self.pendingCompletionId = nil
+                    }
+                }
                 // iOS interpolates elapsed time from playback rate automatically —
                 // only sync Now Playing info every 10 s to avoid pointless system calls
                 if Int(s) % 10 == 0 {
@@ -259,6 +281,7 @@ class AudioPlayerManager: ObservableObject {
                 guard let self, let ep = self.currentEpisode else { return }
                 self.isPlaying = false
                 self.currentTime = 0
+                self.pendingCompletionId = nil  // end handler marks completed itself
                 self.localProgress.removeValue(forKey: ep.id)
                 self.saveLocalProgressMap()
                 self.onEpisodeCompleted?(ep)
@@ -274,6 +297,17 @@ class AudioPlayerManager: ObservableObject {
         isPlaying = false
         updateNowPlayingInfo()
         saveProgressNow()
+        completePendingIfNeeded()
+    }
+
+    /// Marks the episode that crossed the <30 s-remaining mark as played. Only called
+    /// when playback pauses or stops, so the audio is never cut off mid-listen.
+    private func completePendingIfNeeded() {
+        guard let ep = currentEpisode, pendingCompletionId == ep.id else { return }
+        pendingCompletionId = nil
+        localProgress.removeValue(forKey: ep.id)
+        saveLocalProgressMap()
+        onEpisodeCompleted?(ep)
     }
 
     func resume() {
@@ -444,6 +478,9 @@ class AudioPlayerManager: ObservableObject {
                 )
             }
         }
+        // Switching episodes or clearing the player counts as "stopped" — if the old
+        // episode was in the <30 s end zone, mark it played now.
+        completePendingIfNeeded()
         progressSaveTask?.cancel()
         progressSaveTask = nil
         sleepTimerTask?.cancel()
@@ -526,6 +563,9 @@ class AudioPlayerManager: ObservableObject {
     func resetProgress(for episodeId: Int) {
         localProgress.removeValue(forKey: episodeId)
         saveLocalProgressMap()
+        progressResetIds.insert(episodeId)
+        lastProgressResetId = episodeId
+        Task { try? await PinepodsAPIService.shared.updateEpisodeProgress(episodeId: episodeId, listenDuration: 0) }
     }
 
     private func saveLocalProgressMap() {
@@ -556,6 +596,7 @@ class AudioPlayerManager: ObservableObject {
                         self.isPlaying = false
                         self.updateNowPlayingInfo()
                         self.saveProgressNow()
+                        self.completePendingIfNeeded()
                     }
                 case .ended:
                     let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
@@ -628,12 +669,37 @@ class AudioPlayerManager: ObservableObject {
             Task { @MainActor [weak self] in self?.skip(by: -15) }
             return .success
         }
+        center.changePlaybackPositionCommand.isEnabled = true
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             if let e = event as? MPChangePlaybackPositionCommandEvent {
                 Task { @MainActor [weak self] in self?.seek(to: e.positionTime, precise: true) }
             }
             return .success
         }
+
+        // AVRCP Fast Forward / Rewind — hold-to-scrub on Bluetooth headphones
+        // Play at 8× while held; restore normal rate on release.
+        center.seekForwardCommand.isEnabled = true
+        center.seekForwardCommand.addTarget { [weak self] event in
+            guard let self, let e = event as? MPSeekCommandEvent else { return .success }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch e.type {
+                case .beginSeeking:
+                    self.seekScrubTimer?.invalidate()
+                    self.seekScrubTimer = nil
+                    self.player?.rate = 8.0
+                    self.isPlaying = true
+                case .endSeeking:
+                    self.player?.rate = Float(self.playbackRate)
+                    self.updateNowPlayingInfo()
+                @unknown default: break
+                }
+            }
+            return .success
+        }
+
+        center.seekBackwardCommand.isEnabled = false
     }
 
     private func updateNowPlayingInfo() {

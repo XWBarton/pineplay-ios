@@ -28,11 +28,41 @@ struct PlayerView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView(
-            "Nothing Playing",
-            systemImage: "play.slash",
-            description: Text("Pick an episode from your Library or Feed to start listening.")
-        )
+        Group {
+            if player.queue.isEmpty {
+                ContentUnavailableView(
+                    "Nothing Playing",
+                    systemImage: "play.slash",
+                    description: Text("Pick an episode from your Library or Feed to start listening.")
+                )
+            } else {
+                ContentUnavailableView {
+                    Label("Nothing Playing", systemImage: "play.slash")
+                } description: {
+                    Text("^[\(player.queue.count) episodes](inflect: true) waiting in your queue.")
+                } actions: {
+                    Button {
+                        player.playNextInQueue()
+                    } label: {
+                        Label("Play Next in Queue", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("View Queue") { showQueue = true }
+                }
+            }
+        }
+        .navigationTitle("Player")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if !player.queue.isEmpty {
+                    Button { showQueue = true } label: {
+                        Image(systemName: "list.bullet")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showQueue) { QueueView() }
     }
 
     private func nowPlayingContent(_ episode: EpisodeItem) -> some View {
@@ -499,12 +529,18 @@ struct QueueView: View {
                 if !player.queue.isEmpty {
                     Button("Clear", role: .destructive) { player.queue.removeAll() }
                         .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        . glassCapsuled()
                 }
                 Spacer()
                 Text("Queue").font(.headline)
                 Spacer()
                 Button("Done") { dismiss() }
                     .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .glassCapsuled()
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -516,9 +552,13 @@ struct QueueView: View {
                     dismiss()
                 } label: {
                     Label("Play Next", systemImage: "forward.end")
-                        .font(.subheadline.weight(.medium))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.tint)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .glassCapsuled()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
                 .padding(.bottom, 12)
             }
 
@@ -599,6 +639,16 @@ struct QueueView: View {
             }
         }
         .presentationDragIndicator(.visible)
+    }
+}
+
+private extension View {
+    @ViewBuilder func glassCapsuled() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(in: Capsule())
+        } else {
+            self.background(.regularMaterial, in: Capsule())
+        }
     }
 }
 
