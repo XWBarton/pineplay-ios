@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- iOS 26+
-- Xcode 26+ (Swift 5)
+- iOS 17.6+
+- Xcode 15+ (Swift 5)
 
 ## Create the Xcode Project
 

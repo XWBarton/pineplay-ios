@@ -99,9 +99,19 @@ struct PlayerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                if !player.queue.isEmpty {
-                    Button { showQueue = true } label: {
-                        Image(systemName: "list.bullet")
+                HStack(spacing: 16) {
+                    // Preview episodes aren't real subscriptions — there's no queue
+                    // or completed-tracking to fall back on, so give them an explicit
+                    // way to clear it out of the player.
+                    if episode.isPreview {
+                        Button { player.clearPlayer() } label: {
+                            Image(systemName: "xmark.circle")
+                        }
+                    }
+                    if !player.queue.isEmpty {
+                        Button { showQueue = true } label: {
+                            Image(systemName: "list.bullet")
+                        }
                     }
                 }
             }
@@ -522,11 +532,20 @@ struct QueueView: View {
     @EnvironmentObject var downloads: DownloadManager
     @Environment(\.dismiss) var dismiss
 
+    @State private var isSelecting = false
+    @State private var selectedQueueIds: Set<Int> = []
+
     var body: some View {
         VStack(spacing: 0) {
             // Header row
             HStack {
-                if !player.queue.isEmpty {
+                if isSelecting {
+                    Button("Cancel") { isSelecting = false; selectedQueueIds = [] }
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassCapsuled()
+                } else if !player.queue.isEmpty {
                     Button("Clear", role: .destructive) { player.queue.removeAll() }
                         .font(.subheadline)
                         .padding(.horizontal, 12)
@@ -534,13 +553,27 @@ struct QueueView: View {
                         . glassCapsuled()
                 }
                 Spacer()
-                Text("Queue").font(.headline)
+                Text(isSelecting ? "\(selectedQueueIds.count) Selected" : "Queue").font(.headline)
                 Spacer()
-                Button("Done") { dismiss() }
+                if isSelecting {
+                    Button("Remove") {
+                        let idsToRemove = selectedQueueIds
+                        player.queue.removeAll { idsToRemove.contains($0.id) }
+                        selectedQueueIds = []
+                        isSelecting = false
+                    }
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .glassCapsuled()
+                    .disabled(selectedQueueIds.isEmpty)
+                } else {
+                    Button("Done") { dismiss() }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassCapsuled()
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -593,9 +626,14 @@ struct QueueView: View {
                         }
                     }
 
-                    Section("Up Next") {
+                    Section {
                         ForEach(player.queue) { episode in
                             HStack(spacing: 12) {
+                                if isSelecting {
+                                    Image(systemName: selectedQueueIds.contains(episode.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3)
+                                        .foregroundStyle(selectedQueueIds.contains(episode.id) ? Color.accentColor : Color.secondary)
+                                }
                                 PodcastArtworkView(url: episode.artwork, size: 48, cornerRadius: 8)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(episode.title)
@@ -610,28 +648,58 @@ struct QueueView: View {
                                         .foregroundStyle(.tertiary)
                                 }
                                 Spacer()
-                                Image(systemName: "play.circle")
-                                    .font(.title2)
-                                    .foregroundStyle(.secondary)
+                                if !isSelecting {
+                                    Image(systemName: "play.circle")
+                                        .font(.title2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                player.play(episode: episode, localURL: downloads.localURL(for: episode.id))
-                                player.queue.removeAll { $0.id == episode.id }
-                                dismiss()
+                                if isSelecting {
+                                    if selectedQueueIds.contains(episode.id) {
+                                        selectedQueueIds.remove(episode.id)
+                                    } else {
+                                        selectedQueueIds.insert(episode.id)
+                                    }
+                                } else {
+                                    player.play(episode: episode, localURL: downloads.localURL(for: episode.id))
+                                    player.queue.removeAll { $0.id == episode.id }
+                                    dismiss()
+                                }
                             }
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    if let idx = player.queue.firstIndex(where: { $0.id == episode.id }) {
-                                        player.removeFromQueue(at: IndexSet(integer: idx))
+                                if !isSelecting {
+                                    Button(role: .destructive) {
+                                        if let idx = player.queue.firstIndex(where: { $0.id == episode.id }) {
+                                            player.removeFromQueue(at: IndexSet(integer: idx))
+                                        }
+                                    } label: {
+                                        Label("Remove", systemImage: "trash")
                                     }
-                                } label: {
-                                    Label("Remove", systemImage: "trash")
                                 }
                             }
                         }
                         .onDelete { player.removeFromQueue(at: $0) }
                         .onMove { player.moveInQueue(from: $0, to: $1) }
+                        .moveDisabled(isSelecting)
+                    } header: {
+                        HStack {
+                            Text("Up Next")
+                            Spacer()
+                            if isSelecting {
+                                Button(selectedQueueIds.count == player.queue.count ? "Deselect All" : "Select All") {
+                                    if selectedQueueIds.count == player.queue.count {
+                                        selectedQueueIds = []
+                                    } else {
+                                        selectedQueueIds = Set(player.queue.map(\.id))
+                                    }
+                                }
+                            } else {
+                                Button("Select") { isSelecting = true }
+                            }
+                        }
+                        .textCase(nil)
                     }
                 }
                 .listStyle(.insetGrouped)

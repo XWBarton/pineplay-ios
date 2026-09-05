@@ -82,6 +82,32 @@ class PinepodsAPIService: ObservableObject {
         return try decode(PodcastListResponse.self, from: data).pods.map { $0.toPodcastItem() }
     }
 
+    /// Subscribes to a podcast on the server — used when promoting a Staging
+    /// Ground show into the real Library. `feed` is whatever was parsed/found
+    /// for the show (from search metadata or a direct RSS fetch).
+    func addPodcast(
+        title: String, artworkURL: String?, author: String?, description: String?,
+        feedURL: String, website: String?, episodeCount: Int?, explicit: Bool,
+        podcastIndexId: Int?
+    ) async throws {
+        let cfg = try requireConfig()
+        let podcastValues: [String: Any] = [
+            "pod_title": title,
+            "pod_artwork": artworkURL ?? "",
+            "pod_author": author ?? "",
+            "pod_description": description ?? "",
+            "pod_episode_count": episodeCount ?? 0,
+            "pod_feed_url": feedURL,
+            "pod_website": website ?? "",
+            "pod_explicit": explicit,
+            "user_id": cfg.userId,
+            "categories": [String: String]()
+        ]
+        var body: [String: Any] = ["podcast_values": podcastValues]
+        if let podcastIndexId { body["podcast_index_id"] = podcastIndexId }
+        try await post("\(cfg.serverURL)/api/data/add_podcast", body: body)
+    }
+
     func getPodcastEpisodes(podcastId: Int) async throws -> [EpisodeItem] {
         let cfg = try requireConfig()
         let data = try await get(

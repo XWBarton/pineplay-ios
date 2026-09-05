@@ -103,9 +103,18 @@ class AudioPlayerManager: ObservableObject {
                 UserDefaults.standard.set(data, forKey: "playerQueue")
             }
         }
-        // lastPlayingEpisode / lastPlaybackTime are kept in UserDefaults solely as a
-        // fallback for Continue Listening in FeedView (so progress isn't lost if the
-        // server save hadn't landed yet). The player itself starts empty on every launch.
+        // Restore the last-playing episode (paused, no AVPlayer loaded) so the Player
+        // tab survives iOS terminating the app after it's sat idle in the background.
+        // resume() re-loads the AVPlayer on demand — this is what lets a headphone
+        // play-button press work again after the app was killed while paused.
+        if let data = UserDefaults.standard.data(forKey: "lastPlayingEpisode"),
+           let episode = try? JSONDecoder().decode(EpisodeItem.self, from: data) {
+            currentEpisode = episode
+            let savedTime = UserDefaults.standard.integer(forKey: "lastPlaybackTime")
+            currentTime = savedTime > 0 ? Double(savedTime) : Double(episode.listenDuration ?? 0)
+            duration = Double(episode.duration)
+            updateNowPlayingInfo()
+        }
     }
 
     // MARK: - Playback
@@ -121,16 +130,20 @@ class AudioPlayerManager: ObservableObject {
             guard currentEpisode?.id == episode.id else { return }
             self.chapters = loaded
         }
-        // Persist so the mini-player can be restored after an app kill/relaunch
-        if let data = try? JSONEncoder().encode(episode) {
-            UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
+        // Staging Ground previews aren't real subscriptions — skip restore-on-launch
+        // and Continue Listening persistence, which assume a server-tracked episode.
+        if !episode.isPreview {
+            // Persist so the mini-player can be restored after an app kill/relaunch
+            if let data = try? JSONEncoder().encode(episode) {
+                UserDefaults.standard.set(data, forKey: "lastPlayingEpisode")
+            }
+            // Record when this episode was last played so Continue Listening can be
+            // sorted most-recently-listened-first across launches.
+            lastListenedDates[episode.id] = Date()
+            var raw = (UserDefaults.standard.dictionary(forKey: "lastListenedDates") as? [String: Double]) ?? [:]
+            raw["\(episode.id)"] = Date().timeIntervalSince1970
+            UserDefaults.standard.set(raw, forKey: "lastListenedDates")
         }
-        // Record when this episode was last played so Continue Listening can be sorted
-        // most-recently-listened-first across launches.
-        lastListenedDates[episode.id] = Date()
-        var raw = (UserDefaults.standard.dictionary(forKey: "lastListenedDates") as? [String: Double]) ?? [:]
-        raw["\(episode.id)"] = Date().timeIntervalSince1970
-        UserDefaults.standard.set(raw, forKey: "lastListenedDates")
         isLoading = true
         error = nil
         playInternal(episode: episode, localURL: localURL)
@@ -284,8 +297,16 @@ class AudioPlayerManager: ObservableObject {
                 self.pendingCompletionId = nil  // end handler marks completed itself
                 self.localProgress.removeValue(forKey: ep.id)
                 self.saveLocalProgressMap()
-                self.onEpisodeCompleted?(ep)
-                self.playNextInQueue()
+                // A finished preview has nothing to hand off to — advancing into the
+                // real queue here would silently consume a queued episode the user
+                // never asked to play, and the server has no record of this episode
+                // to mark completed. Just clear the player instead.
+                if ep.isPreview {
+                    self.clearPlayer()
+                } else {
+                    self.onEpisodeCompleted?(ep)
+                    self.playNextInQueue()
+                }
             }
 
         updateNowPlayingInfo()
@@ -307,6 +328,8 @@ class AudioPlayerManager: ObservableObject {
         pendingCompletionId = nil
         localProgress.removeValue(forKey: ep.id)
         saveLocalProgressMap()
+        // Previews have no server-side episode record — nothing to mark completed.
+        guard !ep.isPreview else { return }
         onEpisodeCompleted?(ep)
     }
 
@@ -373,7 +396,7 @@ class AudioPlayerManager: ObservableObject {
     // MARK: - Queue
 
     func addToQueue(_ episode: EpisodeItem) {
-        guard currentEpisode?.id != episode.id,
+        guard !episode.isPreview, currentEpisode?.id != episode.id,
               !queue.contains(where: { $0.id == episode.id }) else { return }
         queue.append(episode)
     }
@@ -393,6 +416,7 @@ class AudioPlayerManager: ObservableObject {
     }
 
     func playEpisodeNext(_ episode: EpisodeItem) {
+        guard !episode.isPreview else { return }
         queue.removeAll { $0.id == episode.id }
         queue.insert(episode, at: 0)
     }
@@ -460,8 +484,9 @@ class AudioPlayerManager: ObservableObject {
     }
 
     private func tearDown() {
-        // Save progress immediately before switching episodes
-        if let ep = currentEpisode, currentTime > 0 {
+        // Save progress immediately before switching episodes. Previews have no
+        // server-side episode record — nothing to sync.
+        if let ep = currentEpisode, currentTime > 0, !ep.isPreview {
             let t = currentTime
             localProgress[ep.id] = t  // always keep the freshest position
             saveLocalProgressMap()
@@ -511,6 +536,11 @@ class AudioPlayerManager: ObservableObject {
                 progressSaveTask = nil
                 return
             }
+            // Previews have no server-side episode record — nothing to sync.
+            guard !ep.isPreview else {
+                progressSaveTask = nil
+                return
+            }
             let t = currentTime
             localProgress[ep.id] = t
             saveLocalProgressMap()
@@ -532,7 +562,7 @@ class AudioPlayerManager: ObservableObject {
     }
 
     func saveProgressNow() {
-        guard let ep = currentEpisode, currentTime > 0 else { return }
+        guard let ep = currentEpisode, currentTime > 0, !ep.isPreview else { return }
         let id = ep.id, t = Int(currentTime), isYT = ep.isYoutube
         // Persist position locally so Continue Listening can show the episode even if
         // the network call doesn't finish before the app is killed.

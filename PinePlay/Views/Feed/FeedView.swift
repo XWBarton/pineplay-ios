@@ -16,6 +16,9 @@ struct FeedView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedEpisode: EpisodeItem?
+    /// True when the feed came from parsing subscribed shows' RSS feeds directly
+    /// because the Pinepods server call failed (but the device still has internet).
+    @State private var serverUnreachable = false
 
     var body: some View {
         NavigationStack {
@@ -40,6 +43,24 @@ struct FeedView: View {
                     )
                 } else {
                     List {
+                        if serverUnreachable {
+                            Section {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "wifi.exclamationmark")
+                                        .font(.caption.weight(.semibold))
+                                    Text("Server Unreachable")
+                                        .font(.caption.weight(.semibold))
+                                    Spacer()
+                                    Text("Showing episodes from RSS")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .listRowInsets(EdgeInsets())
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .listRowBackground(Color.clear)
+                        }
                         Section {
                             ForEach(episodes) { episode in
                                 EpisodeRowView(
@@ -132,7 +153,13 @@ struct FeedView: View {
         }
         .task {
             await loadFeed()
-            downloads.autoDownloadNewEpisodes(episodes)
+            // Skip when running on the RSS fallback: those episodes carry synthetic
+            // ids distinct from any real server-id copy already downloaded, so
+            // auto-download can't tell they're not new — it would re-download the
+            // whole "most recent N per show" backlog under fresh ids every time.
+            if !serverUnreachable {
+                downloads.autoDownloadNewEpisodes(episodes)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -140,6 +167,9 @@ struct FeedView: View {
             }
         }
         .onChange(of: network.isOffline) { _, _ in Task { await loadFeed() } }
+        .onReceive(NotificationCenter.default.publisher(for: .feedMutedPodcastsChanged)) { _ in
+            Task { await loadFeed() }
+        }
         // onReceive subscribes to the specific @Published property, not the whole player,
         // so FeedView doesn't re-render on every currentTime tick.
         // @Published emits the current value immediately on subscription — so this fires
@@ -158,7 +188,10 @@ struct FeedView: View {
             }
         }
         .onReceive(AudioPlayerManager.shared.$currentEpisode) { episode in
-            guard let ep = episode, !isNearlyFinished(ep) else { return }
+            // Staging Ground previews have no server-side episode record — they
+            // don't belong in Continue Listening, which drives history/completed
+            // API calls keyed on a real episode id.
+            guard let ep = episode, !ep.isPreview, !isNearlyFinished(ep) else { return }
             // Playing an episode is explicit user intent — remove from dismissed so it
             // reappears in Continue Listening.
             if dismissedIds.contains(ep.id) {
@@ -181,9 +214,10 @@ struct FeedView: View {
     }
 
     private func loadFeed() async {
+        let mutedNames = FeedPreferences.mutedPodcastNames()
         if network.isOffline {
             episodes = downloads.episodeMetadata.values
-                .filter { downloads.locallyDownloaded.contains($0.id) }
+                .filter { downloads.locallyDownloaded.contains($0.id) && !mutedNames.contains($0.podcastName) }
                 .sorted { $0.pubDate > $1.pubDate }
             isLoading = false
             return
@@ -191,7 +225,8 @@ struct FeedView: View {
         isLoading = true
         errorMessage = nil
         do {
-            episodes = try await api.getRecentEpisodes()
+            episodes = try await api.getRecentEpisodes().filter { !mutedNames.contains($0.podcastName) }
+            serverUnreachable = false
             // Rebuild from server, then merge in anything already in inProgress
             // (e.g. a completed episode the user scrubbed back into — don't drop it).
             let resetIds = AudioPlayerManager.shared.progressResetIds
@@ -199,7 +234,8 @@ struct FeedView: View {
                 ($0.listenDuration ?? 0) > 0 && !$0.completed
                     && !resetIds.contains($0.id) && !isNearlyFinished($0)
             }
-            for existing in inProgress where !updated.contains(where: { $0.id == existing.id }) && !isNearlyFinished(existing) {
+            for existing in inProgress where !updated.contains(where: { $0.id == existing.id })
+                && !isNearlyFinished(existing) && !mutedNames.contains(existing.podcastName) {
                 updated.append(existing)
             }
             // Rescue episodes whose progress was saved locally but not yet synced to the server.
@@ -211,9 +247,9 @@ struct FeedView: View {
                 }
             }
             // Ensure the currently playing episode is always present
-            if let playing = AudioPlayerManager.shared.currentEpisode,
+            if let playing = AudioPlayerManager.shared.currentEpisode, !playing.isPreview,
                !updated.contains(where: { $0.id == playing.id }),
-               !isNearlyFinished(playing) {
+               !isNearlyFinished(playing), !mutedNames.contains(playing.podcastName) {
                 updated.append(playing)
             }
             // Fallback: if the server didn't return the last-played episode with progress yet
@@ -224,7 +260,7 @@ struct FeedView: View {
                let lastEpisode = try? JSONDecoder().decode(EpisodeItem.self, from: data),
                !updated.contains(where: { $0.id == lastEpisode.id }),
                !episodes.contains(where: { $0.id == lastEpisode.id && $0.completed }),
-               !isNearlyFinished(lastEpisode) {
+               !isNearlyFinished(lastEpisode), !mutedNames.contains(lastEpisode.podcastName) {
                 updated.append(lastEpisode)
             }
             // Sort by most recently listened — episodes with no recorded date go to the end.
@@ -238,9 +274,46 @@ struct FeedView: View {
                     return da > db
                 }
         } catch {
-            errorMessage = error.localizedDescription
+            await fallBackToRSS(error: error, mutedNames: mutedNames)
         }
         isLoading = false
+    }
+
+    /// Called when the server call fails but the device still has internet.
+    /// Parses each cached subscription's RSS feed directly (bypassing the
+    /// server entirely) so there's still something to browse and download.
+    /// Continue Listening is rebuilt from locally-tracked progress only, since
+    /// there's no server data to merge in.
+    private func fallBackToRSS(error: Error, mutedNames: Set<String>) async {
+        guard !downloads.cachedPodcasts.isEmpty else {
+            errorMessage = error.localizedDescription
+            return
+        }
+        let rssEpisodes = await PodcastFeedService.shared.fetchRecentEpisodes(from: downloads.cachedPodcasts)
+        guard !rssEpisodes.isEmpty else {
+            errorMessage = error.localizedDescription
+            return
+        }
+        episodes = rssEpisodes.filter { !mutedNames.contains($0.podcastName) }
+        serverUnreachable = true
+
+        let localProgress = AudioPlayerManager.shared.localProgress
+        var updated = Array(downloads.episodeMetadata.values)
+            .filter { !$0.completed && !mutedNames.contains($0.podcastName) }
+            .filter { (localProgress[$0.id] ?? 0) > 0 && !isNearlyFinished($0) }
+        if let playing = AudioPlayerManager.shared.currentEpisode, !playing.isPreview,
+           !updated.contains(where: { $0.id == playing.id }),
+           !isNearlyFinished(playing), !mutedNames.contains(playing.podcastName) {
+            updated.append(playing)
+        }
+        let dates = AudioPlayerManager.shared.lastListenedDates
+        inProgress = updated
+            .filter { !dismissedIds.contains($0.id) }
+            .sorted { a, b in
+                let da = dates[a.id] ?? .distantPast
+                let db = dates[b.id] ?? .distantPast
+                return da > db
+            }
     }
 
     /// Episodes with less than 30 s of playtime left are treated as finished and
@@ -257,11 +330,14 @@ struct FeedView: View {
     private func playEpisode(_ episode: EpisodeItem) {
         let localURL = downloads.localURL(for: episode.id)
         AudioPlayerManager.shared.play(episode: episode, localURL: localURL)
+        // RSS-fallback episodes have no server-side record — nothing to sync history to.
+        guard !episode.isPreview else { return }
         Task { try? await api.recordHistory(episodeId: episode.id, isYoutube: episode.isYoutube) }
     }
 
     private func downloadEpisode(_ episode: EpisodeItem) {
         downloads.downloadEpisode(episode)
+        guard !episode.isPreview else { return }
         Task { try? await api.requestServerDownload(episodeId: episode.id, isYoutube: episode.isYoutube) }
     }
 
@@ -278,6 +354,8 @@ struct FeedView: View {
         if AudioPlayerManager.shared.currentEpisode?.id == episode.id {
             AudioPlayerManager.shared.clearPlayer()
         }
+        // RSS-fallback episodes have no server-side record to update.
+        guard !episode.isPreview else { return }
         Task {
             try? await api.markEpisodeCompleted(episodeId: episode.id, isYoutube: episode.isYoutube)
         }
@@ -306,6 +384,9 @@ struct FeedView: View {
             // Marking as unplayed — also wipe local progress cache
             AudioPlayerManager.shared.resetProgress(for: episode.id)
         }
+        // RSS-fallback episodes have no server-side record — the optimistic
+        // local flip above is final; there's no server truth to sync or revert to.
+        guard !episode.isPreview else { return }
         Task {
             do {
                 if episode.completed {

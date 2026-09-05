@@ -9,7 +9,7 @@ struct PodcastArtworkView: View {
 
     @State private var image: UIImage?
 
-    var body: some View {
+    private var artwork: some View {
         Group {
             if let image {
                 Image(uiImage: image)
@@ -19,7 +19,24 @@ struct PodcastArtworkView: View {
                 placeholderView
             }
         }
-        .frame(width: size, height: size)
+    }
+
+    var body: some View {
+        Group {
+            // `size == .infinity` means "fill the space the caller sizes via an
+            // external .aspectRatio(1, contentMode: .fit)". An explicit
+            // .frame(width: .infinity, height: .infinity) ignores that tighter
+            // proposal and just claims all available space in both axes
+            // independently — which is square only by coincidence, and produces
+            // an oversized non-square frame (visible as widescreen episode
+            // artwork overrunning the player controls). maxWidth/maxHeight
+            // instead respect the caller's aspect-ratio-constrained proposal.
+            if size.isFinite {
+                artwork.frame(width: size, height: size)
+            } else {
+                artwork.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay {
             if let progress = downloadProgress {
@@ -141,7 +158,27 @@ struct HTMLInlineView: View {
                               .characterEncoding: String.Encoding.utf8.rawValue],
                     documentAttributes: nil
                   ) else { return nil }
-            return try? AttributedString(ns, including: \.uiKit)
+            // The HTML importer bakes in an explicit black foreground color per run,
+            // which overrides .foregroundStyle(.secondary) and reads as black in dark
+            // mode. Strip only that baked-in black so the Text's own style wins —
+            // leave any color the HTML actually specified (e.g. a highlighted span)
+            // alone.
+            let mutable = NSMutableAttributedString(attributedString: ns)
+            let fullRange = NSRange(location: 0, length: mutable.length)
+            mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
+                guard let color = value as? UIColor, color.isApproximatelyBlack else { return }
+                mutable.removeAttribute(.foregroundColor, range: range)
+            }
+            return try? AttributedString(mutable, including: \.uiKit)
         }.value
+    }
+}
+
+private extension UIColor {
+    /// True for the default black the HTML importer bakes into unstyled text runs.
+    var isApproximatelyBlack: Bool {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getRed(&r, green: &g, blue: &b, alpha: &a) else { return false }
+        return r < 0.15 && g < 0.15 && b < 0.15
     }
 }

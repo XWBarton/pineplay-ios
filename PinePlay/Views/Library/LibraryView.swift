@@ -11,6 +11,10 @@ struct LibraryView: View {
     @State private var isLoading = false
     @State private var isLoadingEpisodes = false
     @State private var errorMessage: String?
+    /// True when the last load fell back to the cached podcast list because the
+    /// server API call failed even though the device has internet — distinct
+    /// from `network.isOffline`, which means there's no internet at all.
+    @State private var serverUnreachable = false
     @State private var showSettings = false
     @State private var showDownloads = false
     @State private var searchText = ""
@@ -26,6 +30,9 @@ struct LibraryView: View {
     @State private var libraryShuffleCount: Double = 5
     @State private var libraryShuffleEpisodes: [EpisodeItem] = []
     @State private var isLoadingShuffleEpisodes = false
+    @State private var mutedPodcastNames: Set<String> = FeedPreferences.mutedPodcastNames()
+    @State private var stagedPodcasts: [StagedPodcast] = StagingGround.load()
+    @State private var showAddToStaging = false
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
@@ -76,7 +83,7 @@ struct LibraryView: View {
                         Button("Retry") { Task { await loadPodcasts() } }
                             .buttonStyle(.borderedProminent)
                     }
-                } else if podcasts.isEmpty && network.isOffline {
+                } else if podcasts.isEmpty && (network.isOffline || serverUnreachable) {
                     ContentUnavailableView(
                         "No Downloads",
                         systemImage: "wifi.slash",
@@ -125,10 +132,23 @@ struct LibraryView: View {
             .sheet(isPresented: $showShuffleSheet) {
                 libraryShuffleSheet
             }
+            .sheet(isPresented: $showAddToStaging) {
+                AddToStagingView()
+            }
         }
         .task { await loadPodcasts() }
         .onChange(of: network.isOffline) { _, offline in
             podcasts = offline ? downloads.offlinePodcasts : downloads.cachedPodcasts
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stagingGroundChanged)) { _ in
+            stagedPodcasts = StagingGround.load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .podcastSubscribed)) { _ in
+            // Refetch so the newly-subscribed show shows up in the grid.
+            Task { await loadPodcasts() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .feedMutedPodcastsChanged)) { _ in
+            mutedPodcastNames = FeedPreferences.mutedPodcastNames()
         }
         .task(id: searchText) {
             guard !searchText.isEmpty else {
@@ -153,10 +173,10 @@ struct LibraryView: View {
         HStack(spacing: 6) {
             Image(systemName: "wifi.slash")
                 .font(.caption.weight(.semibold))
-            Text(network.offlineModeEnabled ? "Offline Mode" : "No Connection")
+            Text(bannerTitle)
                 .font(.caption.weight(.semibold))
             Spacer()
-            Text("Showing downloads only")
+            Text(bannerSubtitle)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -167,9 +187,18 @@ struct LibraryView: View {
         .padding(.top, 4)
     }
 
+    private var bannerTitle: String {
+        if network.isOffline { return network.offlineModeEnabled ? "Offline Mode" : "No Connection" }
+        return "Server Unreachable"
+    }
+
+    private var bannerSubtitle: String {
+        network.isOffline ? "Showing downloads only" : "Showing cached library"
+    }
+
     private var podcastGrid: some View {
         ScrollView {
-            if network.isOffline {
+            if network.isOffline || serverUnreachable {
                 offlineBanner
             }
             LazyVGrid(columns: columns, spacing: 16) {
@@ -177,11 +206,12 @@ struct LibraryView: View {
                     NavigationLink(destination: PodcastDetailView(podcast: podcast)) {
                         PodcastGridCell(
                             podcast: podcast,
-                            downloadedCount: network.isOffline
+                            downloadedCount: (network.isOffline || serverUnreachable)
                                 ? downloads.episodeMetadata.values.filter {
                                     $0.podcastName == podcast.name && downloads.locallyDownloaded.contains($0.id)
                                 }.count
-                                : nil
+                                : nil,
+                            hiddenFromFeed: mutedPodcastNames.contains(podcast.name)
                         )
                     }
                     .buttonStyle(.plain)
@@ -204,10 +234,24 @@ struct LibraryView: View {
                         } label: {
                             Label("Shuffle to Download…", systemImage: "arrow.down.circle")
                         }
+                        Divider()
+                        Button {
+                            let muted = !FeedPreferences.isMuted(podcast.name)
+                            FeedPreferences.setMuted(muted, for: podcast.name)
+                            mutedPodcastNames = FeedPreferences.mutedPodcastNames()
+                        } label: {
+                            if mutedPodcastNames.contains(podcast.name) {
+                                Label("Show in Feed", systemImage: "eye")
+                            } else {
+                                Label("Hide from Feed", systemImage: "eye.slash")
+                            }
+                        }
                     }
                 }
             }
             .padding()
+
+            StagingGroundSection(podcasts: stagedPodcasts, onAdd: { showAddToStaging = true })
         }
         .refreshable { await loadPodcasts() }
     }
@@ -378,7 +422,13 @@ struct LibraryView: View {
         .task(id: shufflePodcast?.id) {
             guard let podcast = shufflePodcast else { return }
             isLoadingShuffleEpisodes = true
-            libraryShuffleEpisodes = (try? await api.getPodcastEpisodes(podcastId: podcast.id)) ?? []
+            do {
+                libraryShuffleEpisodes = try await api.getPodcastEpisodes(podcastId: podcast.id)
+            } catch {
+                // Server unreachable — fetch this show's episodes directly from its
+                // RSS feed instead of leaving the shuffle pool empty.
+                libraryShuffleEpisodes = await PodcastFeedService.shared.fetchEpisodes(for: podcast)
+            }
             let cap = max(1, min(libraryShuffleEpisodes.count, 50))
             libraryShuffleCount = min(libraryShuffleCount, Double(cap))
             isLoadingShuffleEpisodes = false
@@ -402,6 +452,7 @@ struct LibraryView: View {
         case .download:
             for ep in shuffled {
                 downloads.downloadEpisode(ep)
+                guard !ep.isPreview else { continue }
                 Task { try? await api.requestServerDownload(episodeId: ep.id, isYoutube: ep.isYoutube) }
             }
         }
@@ -421,8 +472,21 @@ struct LibraryView: View {
             for podcast in podcasts {
                 PodcastFeedURLRegistry.shared.register(podcast.feedURL, for: podcast.name)
             }
+            serverUnreachable = false
         } catch {
-            errorMessage = error.localizedDescription
+            // The server call failed — fall back to the last-synced subscription
+            // list on disk so the library (and its feed URLs, for RSS fallback
+            // elsewhere) is still browsable rather than showing a hard error.
+            guard !downloads.cachedPodcasts.isEmpty else {
+                errorMessage = error.localizedDescription
+                isLoading = false
+                return
+            }
+            podcasts = downloads.cachedPodcasts
+            for podcast in podcasts {
+                PodcastFeedURLRegistry.shared.register(podcast.feedURL, for: podcast.name)
+            }
+            serverUnreachable = true
         }
         isLoading = false
     }
@@ -477,11 +541,22 @@ struct LibraryView: View {
 struct PodcastGridCell: View {
     let podcast: PodcastItem
     var downloadedCount: Int? = nil
+    var hiddenFromFeed: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            PodcastArtworkView(url: podcast.artworkURL, size: .infinity, cornerRadius: 12)
-                .aspectRatio(1, contentMode: .fit)
+            ZStack(alignment: .topTrailing) {
+                PodcastArtworkView(url: podcast.artworkURL, size: .infinity, cornerRadius: 12)
+                    .aspectRatio(1, contentMode: .fit)
+                if hiddenFromFeed {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(.black.opacity(0.45), in: Circle())
+                        .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 MarqueeText(text: podcast.name, font: .footnote.weight(.semibold))

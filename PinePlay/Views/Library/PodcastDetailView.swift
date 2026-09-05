@@ -14,11 +14,13 @@ struct PodcastDetailView: View {
     @State private var filter: EpisodeFilter = .all
     @State private var sortOrder: SortOrder
     @State private var showShuffleQueueSheet = false
+    @State private var hiddenFromFeed: Bool
 
     init(podcast: PodcastItem) {
         self.podcast = podcast
         let saved = UserDefaults.standard.string(forKey: "sortOrder_\(podcast.id)")
         self._sortOrder = State(initialValue: SortOrder(rawValue: saved ?? "") ?? .newestFirst)
+        self._hiddenFromFeed = State(initialValue: FeedPreferences.isMuted(podcast.name))
     }
     @State private var shuffleQueueCount: Double = 5
     @State private var selectedEpisode: EpisodeItem?
@@ -129,6 +131,16 @@ struct PodcastDetailView: View {
                             Text(order.rawValue).tag(order)
                         }
                     }
+                    Divider()
+                    Button {
+                        hiddenFromFeed.toggle()
+                        FeedPreferences.setMuted(hiddenFromFeed, for: podcast.name)
+                    } label: {
+                        Label(
+                            hiddenFromFeed ? "Show in Feed" : "Hide from Feed",
+                            systemImage: hiddenFromFeed ? "eye" : "eye.slash"
+                        )
+                    }
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
@@ -237,7 +249,14 @@ struct PodcastDetailView: View {
         do {
             episodes = try await api.getPodcastEpisodes(podcastId: podcast.id)
         } catch {
-            errorMessage = error.localizedDescription
+            // Server unreachable but the device has internet — fetch this show's
+            // episodes directly from its RSS feed instead of giving up.
+            let rssEpisodes = await PodcastFeedService.shared.fetchEpisodes(for: podcast)
+            if rssEpisodes.isEmpty {
+                errorMessage = error.localizedDescription
+            } else {
+                episodes = rssEpisodes
+            }
         }
         isLoading = false
     }
@@ -245,11 +264,14 @@ struct PodcastDetailView: View {
     private func playEpisode(_ episode: EpisodeItem) {
         let localURL = downloads.localURL(for: episode.id)
         player.play(episode: episode, localURL: localURL)
+        // RSS-fallback episodes have no server-side record — nothing to sync history to.
+        guard !episode.isPreview else { return }
         Task { try? await api.recordHistory(episodeId: episode.id, isYoutube: episode.isYoutube) }
     }
 
     private func downloadEpisode(_ episode: EpisodeItem) {
         downloads.downloadEpisode(episode)
+        guard !episode.isPreview else { return }
         Task { try? await api.requestServerDownload(episodeId: episode.id, isYoutube: episode.isYoutube) }
     }
 
@@ -281,6 +303,8 @@ struct PodcastDetailView: View {
             // Marking as unplayed — wipe local progress so Continue Listening resets
             AudioPlayerManager.shared.resetProgress(for: episode.id)
         }
+        // RSS-fallback episodes have no server-side record to sync or revert to.
+        guard !episode.isPreview else { return }
         Task {
             do {
                 if episode.completed {

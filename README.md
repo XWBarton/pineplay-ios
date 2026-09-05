@@ -34,8 +34,8 @@ An unofficial native iOS app for [Pinepods](https://github.com/madeofpendletonwo
 
 ## Requirements
 
-- iOS 26+
-- Xcode 26+
+- iOS 17.6+
+- Xcode 15+
 - A running [Pinepods](https://github.com/madeofpendletonwool/PinePods) server
 
 ## Setup

@@ -6,6 +6,8 @@ struct DownloadsView: View {
     @Environment(\.dismiss) var dismiss
 
     @State private var sortOrder: DownloadSort = .newestFirst
+    @State private var isSelecting = false
+    @State private var selectedIds: Set<Int> = []
 
     private enum DownloadSort: String, CaseIterable {
         case newestFirst = "Newest First"
@@ -87,21 +89,99 @@ struct DownloadsView: View {
 
             Spacer()
 
-            Button {
-                let localURL = downloads.localURL(for: episode.id)
-                player.play(episode: episode, localURL: localURL)
-                dismiss()
-            } label: {
-                Image(systemName: "play.circle")
+            if isSelecting {
+                Image(systemName: selectedIds.contains(episode.id) ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
+                    .foregroundStyle(selectedIds.contains(episode.id) ? Color.accentColor : Color.secondary)
+            } else {
+                Button {
+                    let localURL = downloads.localURL(for: episode.id)
+                    player.play(episode: episode, localURL: localURL)
+                    dismiss()
+                } label: {
+                    Image(systemName: "play.circle")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard isSelecting else { return }
+            if selectedIds.contains(episode.id) {
+                selectedIds.remove(episode.id)
+            } else {
+                selectedIds.insert(episode.id)
+            }
         }
     }
 
     var body: some View {
         NavigationStack {
-            List {
+            VStack(spacing: 0) {
+                if isSelecting {
+                    HStack {
+                        Button(selectedIds.count == sortedEpisodes.count ? "Deselect All" : "Select All") {
+                            if selectedIds.count == sortedEpisodes.count {
+                                selectedIds = []
+                            } else {
+                                selectedIds = Set(sortedEpisodes.map(\.id))
+                            }
+                        }
+                        .font(.subheadline)
+                        Spacer()
+                        Text("\(selectedIds.count) selected")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+                downloadsList
+            }
+            .navigationTitle("Downloads")
+            .navigationBarTitleDisplayMode(.inline)
+            .task { await downloads.syncMissingMetadata() }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Sort", selection: $sortOrder) {
+                            ForEach(DownloadSort.allCases, id: \.self) { order in
+                                Text(order.rawValue).tag(order)
+                            }
+                        }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    if !sortedEpisodes.isEmpty {
+                        Button(isSelecting ? "Cancel" : "Select") {
+                            isSelecting.toggle()
+                            if !isSelecting { selectedIds = [] }
+                        }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isSelecting {
+                        Button(role: .destructive) {
+                            selectedIds.forEach { downloads.deleteLocalDownload($0) }
+                            selectedIds = []
+                            isSelecting = false
+                        } label: {
+                            Text("Delete (\(selectedIds.count))")
+                        }
+                        .disabled(selectedIds.isEmpty)
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+        }
+    }
+
+    private var downloadsList: some View {
+        List {
                 // Active downloads
                 if !activeDownloads.isEmpty {
                     Section("Downloading") {
@@ -189,26 +269,6 @@ struct DownloadsView: View {
                         Text("Downloaded · \(totalSize)")
                     }
                 }
-            }
-            .navigationTitle("Downloads")
-            .navigationBarTitleDisplayMode(.inline)
-            .task { await downloads.syncMissingMetadata() }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Picker("Sort", selection: $sortOrder) {
-                            ForEach(DownloadSort.allCases, id: \.self) { order in
-                                Text(order.rawValue).tag(order)
-                            }
-                        }
-                    } label: {
-                        Label("Sort", systemImage: "arrow.up.arrow.down")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
     }
 }

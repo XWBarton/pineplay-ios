@@ -113,6 +113,12 @@ struct EpisodeItem: Identifiable, Hashable, Codable {
     var downloaded: Bool
     var isYoutube: Bool
 
+    /// True for synthetic Staging Ground preview episodes (see
+    /// ParsedFeedEpisode.toEpisodeItem), which use negative ids since they have
+    /// no corresponding Pinepods server record. These shouldn't be persisted for
+    /// restore-on-launch, added to the queue, or auto-advanced into on completion.
+    var isPreview: Bool { id < 0 }
+
     var progress: Double {
         guard let listened = listenDuration, duration > 0 else { return 0 }
         return min(1.0, Double(listened) / Double(duration))
@@ -301,6 +307,118 @@ struct PodcastAccentColors {
     static func color(for podcastName: String) -> Color? {
         guard let hex = load()[podcastName] else { return nil }
         return Color(hex: hex)
+    }
+}
+
+// MARK: - Staging Ground ("give it a go" watchlist)
+
+extension Notification.Name {
+    /// Posted whenever a podcast is added to / removed from the staging ground.
+    static let stagingGroundChanged = Notification.Name("stagingGroundChanged")
+    /// Posted after a staged podcast is subscribed on the server — distinct from
+    /// `stagingGroundChanged` so observers that only care about a real library
+    /// change (and would otherwise refetch from the server) don't fire on every
+    /// stage/unstage, which never touches the server.
+    static let podcastSubscribed = Notification.Name("podcastSubscribed")
+}
+
+/// A podcast the user is considering but hasn't subscribed to yet. Lives entirely
+/// on-device until the user taps Subscribe, at which point it's sent to the
+/// Pinepods server via `add_podcast` and removed from here.
+struct StagedPodcast: Identifiable, Hashable, Codable {
+    var id: String { feedURL }
+    var title: String
+    var artworkURL: String?
+    var author: String?
+    var description: String?
+    var feedURL: String
+    var website: String?
+    var episodeCount: Int?
+    var podcastIndexId: Int?
+    var explicit: Bool
+    var dateAdded: Date
+
+    init(
+        title: String, artworkURL: String?, author: String?, description: String?,
+        feedURL: String, website: String? = nil, episodeCount: Int? = nil,
+        podcastIndexId: Int? = nil, explicit: Bool = false, dateAdded: Date = Date()
+    ) {
+        self.title = title
+        self.artworkURL = artworkURL
+        self.author = author
+        self.description = description
+        self.feedURL = feedURL
+        self.website = website
+        self.episodeCount = episodeCount
+        self.podcastIndexId = podcastIndexId
+        self.explicit = explicit
+        self.dateAdded = dateAdded
+    }
+}
+
+struct StagingGround {
+    private static let key = "stagedPodcasts"
+
+    static func load() -> [StagedPodcast] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let list = try? JSONDecoder().decode([StagedPodcast].self, from: data) else {
+            return []
+        }
+        return list.sorted { $0.dateAdded > $1.dateAdded }
+    }
+
+    static func contains(feedURL: String) -> Bool {
+        load().contains { $0.feedURL == feedURL }
+    }
+
+    static func add(_ podcast: StagedPodcast) {
+        var list = load()
+        guard !list.contains(where: { $0.feedURL == podcast.feedURL }) else { return }
+        list.append(podcast)
+        save(list)
+    }
+
+    static func remove(feedURL: String) {
+        var list = load()
+        list.removeAll { $0.feedURL == feedURL }
+        save(list)
+    }
+
+    private static func save(_ list: [StagedPodcast]) {
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+        NotificationCenter.default.post(name: .stagingGroundChanged, object: nil)
+    }
+}
+
+// MARK: - Feed Preferences (per-show mute)
+
+extension Notification.Name {
+    /// Posted whenever a show is hidden from / restored to the Feed tab.
+    static let feedMutedPodcastsChanged = Notification.Name("feedMutedPodcastsChanged")
+}
+
+struct FeedPreferences {
+    private static let key = "feedMutedPodcastNames"
+
+    static func mutedPodcastNames() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    static func isMuted(_ podcastName: String) -> Bool {
+        mutedPodcastNames().contains(podcastName)
+    }
+
+    static func setMuted(_ muted: Bool, for podcastName: String) {
+        var names = mutedPodcastNames()
+        if muted {
+            names.insert(podcastName)
+        } else {
+            names.remove(podcastName)
+        }
+        UserDefaults.standard.set(Array(names), forKey: key)
+        NotificationCenter.default.post(name: .feedMutedPodcastsChanged, object: nil)
     }
 }
 
